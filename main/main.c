@@ -1,38 +1,22 @@
 // main.c
 #include <stdio.h>
+#include<string.h>
 #include "sdkconfig.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "services/wifi_service.h"
-#include "config/events.h"
+#include "sntp_service.h"
+#include "services/event_loop_service.h"
 
-static const char *TAG = "app";
 
-// WiFi 事件回调
-static void on_wifi_event(app_wifi_event_id_t event, wifi_event_data_t *data)
-{
-    switch (event) {
-        case APP_WIFI_EVENT_CONNECTED:
-            ESP_LOGI(TAG, "WiFi Connected! SSID: %s, IP: %s",
-                     data->ssid, data->ip_address);
-            break;
-        case APP_WIFI_EVENT_DISCONNECTED:
-            ESP_LOGI(TAG, "WiFi Disconnected");
-            break;
-        case APP_WIFI_EVENT_AP_STARTED:
-            ESP_LOGI(TAG, "AP Mode Started");
-            break;
-        case APP_WIFI_EVENT_CONNECTION_FAILED:
-            ESP_LOGE(TAG, "WiFi Connection Failed: %d", data->error_code);
-            break;
-        default:
-            break;
-    }
-}
+static const char *TAG = "app_main";
+
+extern  QueueHandle_t main_event_queue; // 系统请求接收队列
 
 void app_main(void)
 {
-    // 初始化 NVS
+    // 初始化底层硬件
+    //  NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -40,11 +24,85 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
-    // 初始化 WiFi 服务
+    // 初始化系统服务
+    //  WiFi 服务
     wifi_service_init();
-    wifi_service_register_callback(on_wifi_event);
-    wifi_service_start();
+    // sntp 服务
+    sntp_service_init();
+    // 事件请求转发服务
+    event_loop_service_init();
 
-    // 后续任务...
-    wifi_service_connect("ZTE_49A720","1234567890",true);
-}
+
+
+    // 请求一次WiFi服务
+    wifi_service_receive_data_t *payload = (wifi_service_receive_data_t*)malloc(sizeof(wifi_service_receive_data_t));
+    if(payload){
+        // 分配WiFi信息
+        payload->cmd = WIFI_CMD_CONNECT_SAVED;
+        strcpy(payload->ssid,"ZTE_49A720");
+        strcpy(payload->password,"1234567890");
+        payload->save = true;
+        payload->reply_queue = NULL; // 
+    }
+    app_event_t *evt = malloc(sizeof(app_event_t));
+    if(evt){
+        // 构造事件外壳
+        evt-> source = get_wifi_service_ID();
+        evt->payload = payload;
+        ESP_LOGI(TAG,"req wifi conect");
+        xQueueSend(main_event_queue, &evt, 0);
+    }
+
+
+    QueueHandle_t app_main_queue = xQueueCreate(20, sizeof(wifi_service_send_data_t*));; // 系统请求接收队列
+
+    while(1){
+        // 请求一次WiFi服务
+        wifi_service_receive_data_t *payload = (wifi_service_receive_data_t*)malloc(sizeof(wifi_service_receive_data_t));
+        if(payload){
+            // 分配WiFi信息
+            payload->cmd = WIFI_CMD_CHEACK_STATA;
+            payload->reply_queue = app_main_queue; // 
+        }
+        app_event_t *evt = malloc(sizeof(app_event_t));
+        if(evt){
+            // 构造事件外壳
+            evt-> source = get_wifi_service_ID();
+            evt->payload = payload;
+            ESP_LOGI(TAG,"req wifi stata");
+            xQueueSend(main_event_queue, &evt, 0);
+        }
+
+        wifi_service_send_data_t* wifi_data;
+        if (xQueueReceive(app_main_queue, &wifi_data, portMAX_DELAY)){
+            ESP_LOGI(TAG,"rec wifi ser data");
+            ESP_LOGI(TAG,"ssid:%s,pass:%s,rssi:%d,ip:%s",wifi_data->ssid,wifi_data->password,wifi_data->rssi,wifi_data->ip_address);
+            free(wifi_data);
+        }
+        vTaskDelay(1000 / portTICK_PERIOD_MS); 
+
+        // 请求一次sntp服务
+        sntp_service_receive_data_t *sntp_payload = (sntp_service_receive_data_t*)malloc(sizeof(sntp_service_receive_data_t));
+        if(sntp_payload){
+            // 分配WiFi信息
+            sntp_payload->cmd = SNTP_CMD_GET_TIME;
+            sntp_payload->reply_queue = app_main_queue; // 
+        }
+        evt = malloc(sizeof(app_event_t));
+        if(evt){
+            // 构造事件外壳
+            evt-> source = get_sntp_service_ID();
+            evt->payload = sntp_payload;
+            ESP_LOGI(TAG,"req wifi stata");
+            xQueueSend(main_event_queue, &evt, 0);
+        }
+
+        sntp_service_send_data_t* sntp_data;
+        if (xQueueReceive(app_main_queue, &sntp_data, portMAX_DELAY)){
+            ESP_LOGI(TAG,"rec sntp ser data");
+            ESP_LOGI(TAG,"time:%s",sntp_data->current_time);
+            free(sntp_data);
+        }
+        vTaskDelay(1000 / portTICK_PERIOD_MS); 
+    }
+    }

@@ -7,7 +7,9 @@ set(SOURCES
     hal/wifi_hal.c
     
     # Service - 核心服务
+    services/event_loop_service.c
     services/wifi_service.c
+    services/sntp_service.c
     
     # App 层
 )

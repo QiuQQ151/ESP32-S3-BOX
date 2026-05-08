@@ -1,9 +1,5 @@
 # ESP32-S3-BOX
 基于ESP32的桌面盒子
-
-以下是可直接复制到项目 `README.md` 的完整软件框架设计文档：
-
-```markdown
 # 桌面 Box 软件框架设计
 
 ## 1. 系统概述
@@ -125,35 +121,12 @@ desk_box/
 │   ├── main.c                     // 入口，任务创建
 │   ├── app/                       // 应用界面
 │   │   ├── ui_desktop.c
-│   │   ├── ui_clock.c
-│   │   ├── ui_music.c
-│   │   ├── ui_fm.c
-│   │   ├── ui_voice.c
-│   │   ├── ui_weather.c
-│   │   ├── ui_settings.c
-│   │   └── ui_ir.c
 │   ├── services/                  // 业务服务
-│   │   ├── time_service.c/h
-│   │   ├── led_manager.c/h
-│   │   ├── audio_player.c/h
-│   │   ├── voice_engine.c/h
-│   │   ├── weather_service.c/h
-│   │   ├── irmote_service.c/h
-│   │   ├── ext_manager.c/h
-│   │   └── sensor_aggregator.c/h
+│   │   ├── sntp_service.c/h
+│   │   ├── wifi_service.c/h
 │   ├── hal/                       // 硬件抽象
-│   │   ├── display_gc9a01.c/h
-│   │   ├── display_ext_spi.c/h    // 预留
-│   │   ├── touch_xxx.c/h
-│   │   ├── audio_board.c/h        // ES8311/7210
-│   │   ├── led_strip_rmt.c/h
-│   │   ├── encoder.c/h
-│   │   ├── keys.c/h
-│   │   ├── power.c/h              // PWR_HOLD 及 Power 键解析
-│   │   ├── ext_port.c/h
-│   │   └── sensors.c/h
+│   │   ├── wifi_hal.c/h
 │   ├── config/
-│   │   ├── events.h               // 事件定义
 │   │   ├── pin_defs.h
 │   │   └── system_config.h
 │   ├── assets/                    // 内嵌图标/字体（存于Flash）
@@ -163,9 +136,133 @@ desk_box/
 └── README.md
 ```
 
-## 8. 关键设计原则
-- **事件驱动**：模块间通过队列和事件组通信，低耦合。
-- **动态扩展**：支持运行时加载显示设备、输入设备和扩展模块。
-- **硬件抽象**：同一类外设更换型号只需修改 HAL 层实现。
-- **资源降级**：无 SD 卡时系统仍可启动并完成基础操作。
-- **电源管理**：通过 PWR_HOLD 实现软件关机，Power 键多功能设计节省物理按键。
+# 文件模板
+## service模板
+```c
+#ifndef SERVICES_EVENT_xxx_SERVICE_H
+#define SERVICES_EVENT_xxx_SERVICE_H
+
+
+// =========================服务对外接口======================================================
+
+// ===============请求服务
+typedef enum {
+    _CMD_ = 0,             // xxxx
+} _service_cmd_t;
+typedef struct {
+    uint32_t cmd;  // 请求服务
+    QueueHandle_t reply_queue;   // 结果通知队列 (可为 NULL)
+} _service_receive_data_t;
+
+
+// ==================服务回复
+typedef enum {
+    // 当前状态
+    _SRV_OK = 0,    
+    _SRV_STATE_ERROR, // 响应错误
+} _service_state_t;
+
+// 服务发给reply_queue的数据结构
+typedef struct {
+    // ......
+
+    xxxx_service_state_t service_stata;    // 服务回复
+} _service_send_data_t;
+
+
+esp_err_t _service_init(void);  // 初始化  服务（由系统启动）   
+int get_xxxx_service_ID(void);
+
+#endif
+```
+
+```c
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include "esp_err.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "system_config.h"
+#include "event_loop_service.h"
+#include "xxx_service.h"
+
+static const char *TAG = "_service";
+static int _service_ID = 0; // 非0才是有效注册
+
+static void _service_task(void *arg); // 服务任务
+static void handle_(xxxxx_service_receive_data_t *payload); 
+static void handle_reply(QueueHandle_t reply_queue);
+static QueueHandle_t  _service_request_queue; // 接收来自事件循环的 app_event_t*
+
+// ===============api==========================
+esp_err_t _service_init(void)
+{
+    ESP_LOGI(TAG, "Initializing xxxx");
+    // 初始化内容
+
+
+    // 创建外部请求队列
+    _service_request_queue = xQueueCreate(8, sizeof(app_event_t*));
+    if (! _service_request_queue) {
+        ESP_LOGE(TAG, "Failed to create request queue");
+        return ESP_ERR_NO_MEM;
+    }
+
+    // 向事件循环注册
+    xxx_service_ID = event_loop_register_service("_service_task", _service_request_queue);
+    // 启动服务任务
+    xTaskCreate(_service_task, "_service_task", 2048, NULL, 5, NULL);  // 对外服务
+    ESP_LOGI(TAG, "Initialized");
+    return ESP_OK;
+}
+
+int get_xxx_service_ID(void){
+    return xxx_service_ID;
+}
+
+
+
+// 服务任务
+static void xxx_service_task(void *arg){
+   
+    // 分发服务请求
+    _service_receive_data_t *payload;
+    while (1) {
+        if (xQueueReceive( _service_request_queue, &payload, portMAX_DELAY) == pdTRUE) {
+            switch (payload->cmd) {
+                case xxxx: {
+                    // 
+                    handle_(payload);
+                    break;
+                }           
+                default:
+                    ESP_LOGW(TAG, "Unknown cmd: 0x%lx", payload->cmd);
+                    break;
+            }
+            free(payload); // 释放服务请求数据的内存
+        }
+    }
+} 
+    
+void handle_(xxx_service_receive_data_t *payload)
+{
+    // 具体操作
+
+    // 回复请求
+    if( payload->reply_queue){
+        handle_reply( payload->reply_queue);
+    }
+}
+
+// 处理回复
+static void handle_reply(QueueHandle_t reply_queue){
+    xxx_service_send_data_t *payload = malloc(sizeof(_service_send_data_t));
+    // 拷贝数据
+    // ...
+
+    xQueueSend(reply_queue, &payload, 0);
+}
+
+```
