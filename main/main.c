@@ -4,9 +4,16 @@
 #include "sdkconfig.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
+
+// 
+#include "hal/lvgl_hal.h"
+
+// 
 #include "services/wifi_service.h"
-#include "sntp_service.h"
+#include "services/power_service.h"
+#include "services/sntp_service.h"
 #include "services/event_loop_service.h"
+#include "services/ui_service.h"
 
 
 static const char *TAG = "app_main";
@@ -15,7 +22,7 @@ extern  QueueHandle_t main_event_queue; // 系统请求接收队列
 
 void app_main(void)
 {
-    // 初始化底层硬件
+    // ================系统hal
     //  NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES) {
@@ -23,13 +30,22 @@ void app_main(void)
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+    // 
+    //lvgl_hal_init();
 
-    // 初始化系统服务
-    //  WiFi 服务
+
+
+    // ==================系统service
+    // ui
+    ui_service_init();
+
+    // 电源管理
+    power_service_init();
+    //  WiFi
     wifi_service_init();
-    // sntp 服务
+    // sntp
     sntp_service_init();
-    // 事件请求转发服务
+    // 事件转发
     event_loop_service_init();
 
 
@@ -38,7 +54,7 @@ void app_main(void)
     wifi_service_receive_data_t *payload = (wifi_service_receive_data_t*)malloc(sizeof(wifi_service_receive_data_t));
     if(payload){
         // 分配WiFi信息
-        payload->cmd = WIFI_CMD_CONNECT_SAVED;
+        payload->cmd = WIFI_CMD_CONNECT;
         strcpy(payload->ssid,"ZTE_49A720");
         strcpy(payload->password,"1234567890");
         payload->save = true;
@@ -79,7 +95,7 @@ void app_main(void)
             ESP_LOGI(TAG,"ssid:%s,pass:%s,rssi:%d,ip:%s",wifi_data->ssid,wifi_data->password,wifi_data->rssi,wifi_data->ip_address);
             free(wifi_data);
         }
-        vTaskDelay(1000 / portTICK_PERIOD_MS); 
+        vTaskDelay(8000 / portTICK_PERIOD_MS); 
 
         // 请求一次sntp服务
         sntp_service_receive_data_t *sntp_payload = (sntp_service_receive_data_t*)malloc(sizeof(sntp_service_receive_data_t));
@@ -103,6 +119,6 @@ void app_main(void)
             ESP_LOGI(TAG,"time:%s",sntp_data->current_time);
             free(sntp_data);
         }
-        vTaskDelay(1000 / portTICK_PERIOD_MS); 
+        vTaskDelay(8000 / portTICK_PERIOD_MS); 
     }
     }
