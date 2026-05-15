@@ -116,6 +116,7 @@ void handle_get_time(sntp_service_receive_data_t *payload)
 static void handle_reply(QueueHandle_t reply_queue){
     sntp_service_send_data_t *payload = malloc(sizeof(sntp_service_send_data_t));
     // 拷贝数据
+    payload->service_id = sntp_service_ID; // 标识服务来源
     payload->year = sntp_time.year;
     payload->month = sntp_time.month;
     payload->day = sntp_time.day;

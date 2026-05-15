@@ -17,3 +17,9 @@ dependencies:
   lvgl/lvgl: ^8.3.0
   esp_lcd_gc9a01: ^1.0
   espressif/esp_lcd_touch: '*'
+  espressif/led_strip: '>=2.5.0'
+  espressif/es8311: '*'
+  # 添加 esp_codec_dev 依赖，确保使用兼容版本
+  espressif/esp_codec_dev:
+    version: "1.1.*"
+    public: true

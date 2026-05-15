@@ -34,7 +34,7 @@
 | USB 检测 / 电池电压     | ADC（预留）        | 硬件暂不支持，预留 ADC 通道及服务接口，后续适配电源管理 IC            |
 
 ## 3. 软件架构分层
-```
+```raw
 ┌──────────────────────────────────────────────┐
 │        Application (应用任务 & UI)           │
 │  桌面 时钟 音乐 FM 语音 天气 设置 红外       │
@@ -175,7 +175,6 @@ int get_xxxx_service_ID(void);
 
 #endif
 ```
-
 ```c
 #include <stdio.h>
 #include <string.h>
@@ -265,4 +264,176 @@ static void handle_reply(QueueHandle_t reply_queue){
     xQueueSend(reply_queue, &payload, 0);
 }
 
+```
+
+
+## app应用模板
+
+```c
+#ifndef TEMPLATE_APP_H
+#define TEMPLATE_APP_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/**
+ * @brief 注册应用到 UI 服务
+ * 
+ * 调用此函数将应用添加到系统中，之后可通过 ui_service_open_app("template_app") 打开。
+ */
+void template_app_register(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // TEMPLATE_APP_H
+```
+
+
+```c
+#include "template_app.h"
+#include "ui_service.h"
+#include "esp_log.h"
+#include "lvgl.h"
+#include "keys_hal.h"
+#include <inttypes.h>   // for PRIu32
+
+// 应用标签（用于日志）
+static const char *TAG = "template_app";
+
+// 全局应用实例
+static ui_app_t s_template_app;
+
+// ---------- 回调函数声明 ----------
+static void template_on_create(ui_app_t *app);
+static void template_on_resume(ui_app_t *app);
+static void template_on_pause(ui_app_t *app);
+static void template_on_destroy(ui_app_t *app);
+static bool template_on_key_event(ui_app_t *app, void *key_event);
+static void template_on_receive_data(ui_app_t *app, uint32_t cmd, void *data, size_t len);
+
+// ---------- 注册函数实现 ----------
+void template_app_register(void)
+{
+    s_template_app.name = "template_app";               // 应用唯一标识名
+    s_template_app.screen = NULL;
+    s_template_app.on_create = template_on_create;
+    s_template_app.on_resume = template_on_resume;
+    s_template_app.on_pause = template_on_pause;
+    s_template_app.on_destroy = template_on_destroy;
+    s_template_app.on_key_event = template_on_key_event;
+    s_template_app.on_receive_data = template_on_receive_data;
+
+    ui_service_register_app(&s_template_app);
+    ESP_LOGI(TAG, "Template app registered");
+}
+
+// ---------- 回调函数实现 ----------
+
+/**
+ * @brief 创建应用界面（首次打开时调用）
+ */
+static void template_on_create(ui_app_t *app)
+{
+    ESP_LOGI(TAG, "on_create");
+
+    // 创建主屏幕
+    app->screen = lv_obj_create(NULL);
+    if (!app->screen) {
+        ESP_LOGE(TAG, "Failed to create screen");
+        return;
+    }
+
+    // ========== 在此添加你的 UI 控件 ==========
+    // 示例：添加一个标签
+    lv_obj_t *label = lv_label_create(app->screen);
+    lv_label_set_text(label, "Template App");
+    lv_obj_center(label);
+    // ========================================
+}
+
+/**
+ * @brief 应用从后台恢复到前台时调用
+ */
+static void template_on_resume(ui_app_t *app)
+{
+    ESP_LOGI(TAG, "on_resume");
+    // 刷新数据、恢复播放等
+}
+
+/**
+ * @brief 应用被切换到后台时调用
+ */
+static void template_on_pause(ui_app_t *app)
+{
+    ESP_LOGI(TAG, "on_pause");
+    // 暂停播放、保存状态等
+}
+
+/**
+ * @brief 应用被销毁时调用（返回桌面清空栈时触发）
+ */
+static void template_on_destroy(ui_app_t *app)
+{
+    ESP_LOGI(TAG, "on_destroy");
+    if (app->screen) {
+        lv_obj_del(app->screen);
+        app->screen = NULL;
+    }
+    // 释放其他动态分配的资源
+}
+
+/**
+ * @brief 按键事件处理
+ * @param app      当前应用实例
+ * @param key_event 按键数据结构（key_event_data_t*）
+ * @return true 表示事件已处理，系统不再执行默认行为；
+ *         false 表示未处理，系统会执行默认行为（如 BACK 键触发返回）
+ */
+static bool template_on_key_event(ui_app_t *app, void *key_event)
+{
+    key_event_data_t *key = (key_event_data_t *)key_event;
+
+    if (key->event == KEY_EVENT_PRESS) {
+        switch (key->key_id) {
+            case KEY_ID_ENTER:
+                ESP_LOGI(TAG, "ENTER pressed");
+                // TODO: 处理确认操作
+                return true;   // 已处理
+
+            // 如果硬件支持方向键，可取消注释以下代码
+            // case KEY_ID_UP:
+            //     ESP_LOGI(TAG, "UP pressed");
+            //     return true;
+            // case KEY_ID_DOWN:
+            //     ESP_LOGI(TAG, "DOWN pressed");
+            //     return true;
+            // case KEY_ID_LEFT:
+            //     ESP_LOGI(TAG, "LEFT pressed");
+            //     return true;
+            // case KEY_ID_RIGHT:
+            //     ESP_LOGI(TAG, "RIGHT pressed");
+            //     return true;
+
+            default:
+                break;
+        }
+    }
+    // 未处理的按键（如 BACK 键）将交给系统默认处理
+    return false;
+}
+
+/**
+ * @brief 接收其他服务发来的自定义数据
+ * @param cmd   命令码（可自定义）
+ * @param data  数据指针
+ * @param len   数据长度
+ */
+static void template_on_receive_data(ui_app_t *app, uint32_t cmd, void *data, size_t len)
+{
+    ESP_LOGI(TAG, "Received custom command: %" PRIu32 ", len=%d", cmd, len);
+    // TODO: 根据 cmd 处理不同消息
+}
 ```

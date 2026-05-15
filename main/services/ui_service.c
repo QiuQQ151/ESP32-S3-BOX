@@ -1,142 +1,340 @@
+// services/ui_service.c
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <sys/stat.h>
+#include <errno.h>
+#include <dirent.h>
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_timer.h"
+#include "esp_psram.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
-#include "system_config.h"
-#include "hal/lvgl_hal.h"
 #include "lvgl.h"
-#include "services/event_loop_service.h"
+//
+#include "system_config.h"
 #include "ui_service.h"
 
-static const char *TAG = "ui_service";
-static int ui_service_ID = 0; // 非0才是有效注册
-static lv_disp_t *disp = NULL;
-static void ui_service_update_task(void *arg); //页面更新
-static void ui_service_task(void *arg); // 服务任务
-// static void handle_(xxxxx_service_receive_data_t *payload); 
-// static void handle_reply(QueueHandle_t reply_queue);
-static QueueHandle_t  ui_service_request_queue; // 接收来自事件循环的 app_event_t*
+ //应用注册头文件
+#include "desktop_app.h"     
+#include "radio_app.h"
 
-// ===============api==========================
+static const char *TAG = "ui_service";
+static int ui_service_ID = 0;
+static QueueHandle_t ui_service_request_queue;
+static ui_app_t *current_app = NULL;  // 活动的app编号，用于事件转发
+
+// app栈(存活的app)
+#define MAX_APP_STACK 10
+static ui_app_t *app_stack[MAX_APP_STACK];
+static int stack_top = -1;
+
+// app数量
+#define MAX_APPS 20 
+static ui_app_t *app_list[MAX_APPS];
+static int app_count = 0;
+
+// 界面定时更新
+static esp_timer_handle_t lvgl_tick_timer = NULL;
+
+// 内部函数声明
+static void ui_service_task(void *arg);
+static void handle_key_event(key_event_data_t *data);
+static void default_app_key_handler(key_event_data_t *data);
+static void ui_show_screen(ui_app_t *app);
+static ui_app_t *find_app(const char *name);
+static void lvgl_tick_callback(void *arg);  // 界面定时更新回调
+static void ui_show_booting(const char* path);   // 开机画面
+
+// =============== API 实现 ===============
 esp_err_t ui_service_init(void)
 {
-    ESP_LOGI(TAG, "Initializing xxxx");
-    // 初始化内容
-    disp = lvgl_hal_init();
+    // 1. 初始化显示和触摸硬件
+    lvgl_hal_init();
 
-    // 创建外部请求队列
-    ui_service_request_queue = xQueueCreate(8, sizeof(app_event_t*));
-    if (! ui_service_request_queue) {
+    // 2. 创建 LVGL 计时器
+    const esp_timer_create_args_t tick_timer_args = {
+        .callback = &lvgl_tick_callback,
+        .name = "lvgl_tick"
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&tick_timer_args, &lvgl_tick_timer));
+    ESP_ERROR_CHECK(esp_timer_start_periodic(lvgl_tick_timer, 5000));
+
+    // 3. 创建 UI 请求队列
+    ui_service_request_queue = xQueueCreate(16, sizeof(void *));
+    if (!ui_service_request_queue) {
         ESP_LOGE(TAG, "Failed to create request queue");
         return ESP_ERR_NO_MEM;
     }
 
-    // 向事件循环注册
-    ui_service_ID = event_loop_register_service("ui_service_task", ui_service_request_queue);
-    // 启动服务任务
-    xTaskCreate(ui_service_update_task, "ui_service_update_task", 10*1024, NULL, 5, NULL); 
-    xTaskCreate(ui_service_task, "ui_service_task", 30*1024, NULL, 5, NULL);  // 对外服务
-    ESP_LOGI(TAG, "Initialized");
+    // 4. 注册服务
+    ui_service_ID = event_loop_register_service("ui_service", ui_service_request_queue);
+    if (ui_service_ID == 0) {
+        ESP_LOGE(TAG, "Failed to register service");
+        vQueueDelete(ui_service_request_queue);
+        return ESP_FAIL;
+    }
+
+    // 5. 注册应用
+    desktop_app_register(); // 桌面
+    radio_app_register();
+
+    // 6. 创建 UI 服务任务
+    BaseType_t task_ret = xTaskCreate(ui_service_task, "ui_service_task", 8192, NULL, 4, NULL);
+    if (task_ret != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create UI task");
+        return ESP_ERR_NO_MEM;
+    }
+
+    // 7. 显示开机动画
+    // ui_show_booting("S:/system/icon/icon_booting1.gif");
+
+    // 8. 发送打开桌面的命令
+    // vTaskDelay(1000 / portTICK_PERIOD_MS);
+    ui_service_receive_data_t *open_evt = malloc(sizeof(ui_service_receive_data_t));
+    if (open_evt) {
+        open_evt->cmd = UI_CMD_OPEN_APP;
+        open_evt->reply_queue = NULL;
+        open_evt->data = strdup("desktop_app");
+        open_evt->data_len = strlen("desktop_app") + 1;
+        xQueueSend(ui_service_request_queue, &open_evt, 0);
+    }
+
+    ESP_LOGI(TAG, "UI Service initialized with ID %d", ui_service_ID);
     return ESP_OK;
 }
 
-int get_ui_service_ID(void){
+
+// 获取服务注册的ID
+int get_ui_service_ID(void) {
     return ui_service_ID;
 }
 
-static void ui_service_update_task(void *arg){
-    while (1)
-    {
-        // raise the task priority of LVGL and/or reduce the handler period can improve the performance
-        vTaskDelay(pdMS_TO_TICKS(20));
-        // The task running lv_timer_handler should have lower priority than that running `lv_tick_inc`
-        lv_timer_handler();
-    }
-} 
-
-// 按钮点击回调函数
-static void btn_click_event_cb(lv_event_t *e)
+// 注册函数
+void ui_service_register_app(ui_app_t *app)
 {
-    // 获取用户数据（即计数器标签对象指针）
-    lv_obj_t *counter_label = (lv_obj_t *)lv_event_get_user_data(e);
-    if (counter_label) {
-        // 读取当前数字并增加
-        const char *text = lv_label_get_text(counter_label);
-        int count = 0;
-        if (text && sscanf(text, "Count: %d", &count) == 1) {
-            count++;
-        } else {
-            count = 1;
+    if (!app || !app->name) return;
+    if (app_count >= MAX_APPS) {
+        ESP_LOGE(TAG, "App registry full!");
+        return;
+    }
+    if (find_app(app->name)) {
+        ESP_LOGW(TAG, "App '%s' already registered", app->name);
+        return;
+    }
+    app_list[app_count++] = app;
+    ESP_LOGI(TAG, "Registered app: %s", app->name);
+}
+
+// 
+void ui_service_open_app(const char *name)
+{
+    ui_app_t *app = find_app(name);
+    if (!app) {
+        ESP_LOGE(TAG, "App not found: %s", name);
+        return;
+    }
+    if (!app->screen) {
+        if (app->on_create) {
+            app->on_create(app);
         }
-        char buf[32];
-        snprintf(buf, sizeof(buf), "Count: %d", count);
-        lv_label_set_text(counter_label, buf);
+        if (!app->screen) {
+            // 应用未创建屏幕，自动创建默认屏幕
+            app->screen = lv_obj_create(NULL);
+            if (app->screen == NULL) {
+                ESP_LOGE(TAG, "Failed to create screen for app %s", name);
+                return;
+            }
+            lv_obj_t *label = lv_label_create(app->screen);
+            lv_label_set_text(label, app->name);
+            lv_obj_center(label);
+        }
+    }
+    if (current_app && current_app != app && stack_top < MAX_APP_STACK - 1) {
+        app_stack[++stack_top] = current_app;
+    }
+    if (current_app && current_app != app && current_app->on_pause) {
+        current_app->on_pause(current_app);
+    }
+    ui_show_screen(app);
+    if (app->on_resume) {
+        app->on_resume(app);
+    }
+    current_app = app;
+    ESP_LOGI(TAG, "Opened app: %s", name);
+}
+
+void ui_service_go_back(void)
+{
+    if (stack_top >= 0) {
+        ui_app_t *prev = app_stack[stack_top--];
+        if (current_app && current_app->on_pause) {
+            current_app->on_pause(current_app);
+        }
+        ui_show_screen(prev);
+        if (prev->on_resume) {
+            prev->on_resume(prev);
+        }
+        current_app = prev;
+        ESP_LOGI(TAG, "Back to app: %s", prev->name);
+    } else {
+        ESP_LOGI(TAG, "Already at root, cannot go back");
     }
 }
 
-// 服务任务
-static void ui_service_task(void *arg){
-   
-    // 创建测试界面
-    lv_obj_t *scr = lv_disp_get_scr_act(disp);
-    lv_obj_clean(scr);
-
-    lv_obj_t *label = lv_label_create(scr);
-    lv_label_set_text(label, "LVGL Ready");
-    lv_obj_align(label, LV_ALIGN_CENTER, 0, -20);
-    lv_obj_set_style_text_color(label, lv_color_hex(0xFFFFFF), 0);
-
-    lv_obj_t *counter_label = lv_label_create(scr);
-    lv_obj_align(counter_label, LV_ALIGN_CENTER, 0, 30);
-    lv_label_set_text(counter_label, "Count: 0");
-    //lv_obj_set_style_text_font(counter_label, &font_alipuhui20, 0); 
-    lv_obj_set_style_text_color(counter_label, lv_color_hex(0x00FF00), 0);
-
-    lv_obj_t *btn = lv_btn_create(scr);
-    lv_obj_align(btn, LV_ALIGN_CENTER, 0, 80);
-    lv_obj_t *btn_label = lv_label_create(btn);
-    lv_label_set_text(btn_label, "Click Me");
-    lv_obj_center(btn_label);
-    lv_obj_add_event_cb(btn, btn_click_event_cb, LV_EVENT_CLICKED, counter_label);
-
-
-    // 分发服务请求
-    ui_service_receive_data_t *payload;
-    while (1) {
-        if (xQueueReceive( ui_service_request_queue, &payload, portMAX_DELAY) == pdTRUE) {
-            switch (payload->cmd) {
-                case 0: {
-                    // 
-                    //handle_(payload);
-                    break;
-                }           
-                default:
-                    ESP_LOGW(TAG, "Unknown cmd: 0x%lx", payload->cmd);
-                    break;
-            }
-            free(payload); // 释放服务请求数据的内存
+// 回到desktop
+void ui_service_go_home(void)
+{
+    while (stack_top >= 0) {
+        ui_app_t *app = app_stack[stack_top--];
+        if (app->on_destroy) {
+            app->on_destroy(app);
         }
     }
-} 
-    
-// void handle_(xxx_service_receive_data_t *payload)
-// {
-//     // 具体操作
+    ui_app_t *home = find_app("desktop_app");
+    if (home) {
+        if (current_app && current_app != home && current_app->on_pause) {
+            current_app->on_pause(current_app);
+        }
+        ui_show_screen(home);
+        if (home->on_resume) {
+            home->on_resume(home);
+        }
+        current_app = home;
+    }
+}
 
-//     // 回复请求
-//     if( payload->reply_queue){
-//         handle_reply( payload->reply_queue);
-//     }
-// }
+QueueHandle_t get_ui_service_queue(void) {
+    return ui_service_request_queue;
+}
 
-// // 处理回复
-// static void handle_reply(QueueHandle_t reply_queue){
-//     xxx_service_send_data_t *payload = malloc(sizeof(_service_send_data_t));
-//     // 拷贝数据
-//     // ...
+// =============== 任务与 LVGL 驱动 ===============
+static void lvgl_tick_callback(void *arg)
+{
+    lv_tick_inc(5);
+}
 
-//     xQueueSend(reply_queue, &payload, 0);
-// }
+// 等待接收事件
+static void ui_service_task(void *arg)
+{
+    const TickType_t lvgl_period = pdMS_TO_TICKS(5);
+    void *received;
+
+    while (1) {
+        if (xQueueReceive(ui_service_request_queue, &received, lvgl_period) == pdTRUE) {
+
+            ui_service_receive_data_t *payload = (ui_service_receive_data_t *)received;
+            // 处理事件
+            switch (payload->cmd) {
+                // 按键事件
+                case UI_CMD_KEY_EVENT: {
+                    // 提取按键事件有效
+                    ESP_LOGI(TAG,"rec event from key_hal");
+                    key_event_data_t *key = (key_event_data_t *)payload->data;
+                    if (key) {
+                        handle_key_event(key);
+                        free(key);
+                    }
+                    break;
+                }
+                // 打开应用
+                case UI_CMD_OPEN_APP: {
+                    const char *app_name = (const char *)payload->data;
+                    if (app_name) {
+                        ui_service_open_app(app_name);
+                        free(payload->data);
+                    }
+                    break;
+                }
+                // 返回
+                case UI_CMD_GO_BACK:
+                    ui_service_go_back();
+                    break;
+                case UI_CMD_TO_HOME:
+                    ui_service_go_home();
+                    break;
+                case UI_CMD_UPDATE_WIDGET:
+                default:
+                   // 转发给当前应用处理
+                    if (current_app && current_app->on_receive_data) {
+                        current_app->on_receive_data(current_app, payload);
+                    }
+                    if (payload->data) free(payload->data);
+                    break;
+            }            
+
+            free(payload);
+        }
+        lv_timer_handler();
+        vTaskDelay(1);
+    }
+}
+
+// =============== 按键处理 ===============
+static void handle_key_event(key_event_data_t *data)
+{
+    if (current_app && current_app->on_key_event) {
+        if (current_app->on_key_event(current_app, data)) {
+            return;
+        }
+    }
+    default_app_key_handler(data);
+}
+
+static void default_app_key_handler(key_event_data_t *data)
+{
+    switch (data->event) {
+        case KEY_EVENT_PRESS:
+            if (data->key_id == KEY_ID_BACK) {
+                ui_service_go_back();
+            } else if (data->key_id == KEY_ID_ENTER) {
+                // 默认回车无操作，由应用处理
+            }
+            break;
+        default:
+            break;
+    }
+}
+
+// =============== 界面切换辅助 ===============
+static void ui_show_screen(ui_app_t *app)
+{
+    if (!app || !app->screen) return;
+    if (current_app && current_app->screen && current_app->screen != app->screen) {
+        lv_obj_add_flag(current_app->screen, LV_OBJ_FLAG_HIDDEN);
+    }
+    lv_obj_clear_flag(app->screen, LV_OBJ_FLAG_HIDDEN);
+    lv_scr_load_anim(app->screen, LV_SCR_LOAD_ANIM_FADE_ON, 200, 0, false);
+}
+
+static ui_app_t *find_app(const char *name)
+{
+    for (int i = 0; i < app_count; i++) {
+        if (strcmp(app_list[i]->name, name) == 0) {
+            return app_list[i];
+        }
+    }
+    return NULL;
+}
+
+// =============== 开机画面 ===============
+static lv_obj_t* gif_obj = NULL;
+
+static void ui_show_booting(const char* file_path) {
+    if (!file_path) {
+        ESP_LOGE(TAG, "Invalid file path (NULL)");
+        return;
+    }
+
+    sd_hal_list_content("/sdcard/system/icon");
+
+    gif_obj = lv_gif_create(lv_scr_act());
+    if (!gif_obj) {
+        ESP_LOGE(TAG, "Failed to create lv_gif object");
+        return;
+    }
+
+    // lv_gif_set_src(gif_obj, file_path);
+    lv_obj_center(gif_obj);
+}

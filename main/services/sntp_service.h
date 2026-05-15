@@ -25,6 +25,7 @@ typedef enum {
 
 // 服务发给reply_queue的数据结构
 typedef struct {
+    int service_id;   // 标识服务来源
     int year;
     int month;
     int day;

@@ -30,7 +30,7 @@ typedef struct {
 } wifi_service_receive_data_t;
 
 
-// ==================服务回复
+// ==================服务通知
 typedef enum {
     // 当前状态
     WIFI_SRV_STATE_IDLE = 0, //空闲
@@ -53,7 +53,7 @@ typedef struct {
     char password[65];    // 动态分配，接收方负责 free
     char ip_address[20];
     int8_t rssi;
-    wifi_service_state_t service_stata;    // 服务回复
+    wifi_service_state_t service_stata;    // 服务通知
 } wifi_service_send_data_t;
 
 /**
@@ -64,7 +64,7 @@ typedef struct {
  *        4. 向全局事件循环注册 EVENT_SRC_WIFI
  */
 esp_err_t wifi_service_init(void);  // 初始化wifi服务（由系统启动）   
-int get_wifi_service_ID(void); // 获取wifi服务的注册id
+QueueHandle_t get_wifi_service_queue(void); // 获取wifi服务的请求队列
 
 #ifdef __cplusplus
 }

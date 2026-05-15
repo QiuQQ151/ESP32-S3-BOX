@@ -6,7 +6,7 @@
 #include "nvs.h"
 #include "esp_log.h"
 #include "hal/wifi_hal.h"
-#include "event_loop_service.h"
+#include "services/system_event.h"
 
 
 static const char *TAG = "wifi_service";
@@ -35,8 +35,8 @@ static bool s_has_credentials;// NVS有无保存的wifi
 static bool load_credentials(void); // 加载wifi信息
 static bool save_credentials(const char *ssid, const char *password);  // 保存WiFi信息
 
-static QueueHandle_t   wifi_service_request_queue; // 接收来自事件循环的 app_event_t*
-static int wifi_service_ID = 0;
+static QueueHandle_t   wifi_service_request_queue; //
+
 // ==================== 对外 API ====================
 
 
@@ -49,24 +49,20 @@ esp_err_t wifi_service_init(void)
     load_credentials();
 
     // 3. 创建外部wifi请求队列
-     wifi_service_request_queue = xQueueCreate(8, sizeof(app_event_t*));
+    wifi_service_request_queue = xQueueCreate(8, sizeof(event_data_t*));
     if (! wifi_service_request_queue) {
         ESP_LOGE(TAG, "Failed to create request queue");
         return ESP_ERR_NO_MEM;
     }
-
-    // 4. 向事件循环注册
-    wifi_service_ID = event_loop_register_service("wifi_service_task", wifi_service_request_queue);
-
     // 5. 启动服务任务
     xTaskCreate(wifi_service_task, "wifi_service_task", 3584, NULL, 5, &wifi_service_task_handle);
     ESP_LOGI(TAG, "Initialized");
     return ESP_OK;
 }
 
-// 获取wifi服务的注册id
-int get_wifi_service_ID(void){
-    return wifi_service_ID;
+// 获取wifi服务的请求队列
+QueueHandle_t get_wifi_service_queue(void){
+    return wifi_service_request_queue;
 }
 
 // ==================wifi服务内部函数==================================================
@@ -76,35 +72,46 @@ int get_wifi_service_ID(void){
 static void wifi_service_task(void *arg)
 {
     // 分发WiFi服务请求
-    wifi_service_receive_data_t *payload;
+    event_data_t *evt_data;
     while (1) {
-        if (xQueueReceive( wifi_service_request_queue, &payload, portMAX_DELAY) == pdTRUE) {
-            switch (payload->cmd) {
-                case WIFI_CMD_CONNECT: {
-                    // 请求连接
-                    handle_connect(payload);
-                    break;
+        if (xQueueReceive( wifi_service_request_queue, &evt_data, portMAX_DELAY) == pdTRUE) {
+            if( evt_data->event_type == REQUEST ){
+                ESP_LOGI(TAG, "Received request event from service ID: %d", evt_data->service_id);
+                wifi_service_receive_data_t *payload = (wifi_service_receive_data_t*)evt_data->data;
+                switch (payload->cmd) {
+                    case WIFI_CMD_CONNECT: {
+                        // 请求连接
+                        handle_connect(payload);
+                        break;
+                    }
+                    case WIFI_CMD_DISCONNECT: {
+                        // 断开连接
+                        handle_disconnect(payload);
+                        break;
+                    }
+                    case WIFI_CMD_CONNECT_SAVED:{
+                        // 连接NVS中保存的wifi信息
+                        handle_connect_save(payload);
+                        break;
+                    } 
+                    case WIFI_CMD_CHEACK_STATA:{
+                        // 查询WiFi状态
+                        handle_cheack_stata(payload);
+                        break;
+                    }             
+                    default:
+                        ESP_LOGW(TAG, "Unknown cmd: 0x%lx", payload->cmd);
+                        break;
                 }
-                case WIFI_CMD_DISCONNECT: {
-                    // 断开连接
-                    handle_disconnect(payload);
-                    break;
-                }
-                case WIFI_CMD_CONNECT_SAVED:{
-                    // 连接NVS中保存的wifi信息
-                    handle_connect_save(payload);
-                    break;
-                } 
-                case WIFI_CMD_CHEACK_STATA:{
-                    // 查询WiFi状态
-                    handle_cheack_stata(payload);
-                    break;
-                }             
-                default:
-                    ESP_LOGW(TAG, "Unknown cmd: 0x%lx", payload->cmd);
-                    break;
+            } else {
+                ESP_LOGW(TAG, "Unknown event type: %d", evt_data->event_type);
             }
-            free(payload); // 释放服务请求数据的内存
+            if(evt_data->data){
+                free(evt_data->data);
+            }
+            if(evt_data){
+                free(evt_data);
+            }
         }
     }
 }

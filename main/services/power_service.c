@@ -7,6 +7,7 @@
 #include "freertos/queue.h"
 #include "system_config.h"
 #include "event_loop_service.h"
+#include "hal/power_io_hal.h"
 #include "power_service.h"
 
 static const char *TAG = "power_service";

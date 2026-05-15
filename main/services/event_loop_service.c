@@ -7,8 +7,6 @@
 #include "event_loop_service.h"
 
 
-
-
 #define MAX_SERVICES 50  // 最大支持的服务数量
 typedef struct {
     bool  used;           // 条目是否被占用
@@ -71,6 +69,7 @@ static QueueHandle_t find_service_queue(int source) {
     return NULL;
 }
 
+
 // 事件循环任务
 static void event_loop_task(void *pvParameters) {
     ESP_LOGI(TAG, "Event loop task started");
@@ -79,7 +78,11 @@ static void event_loop_task(void *pvParameters) {
         if (xQueueReceive(main_event_queue, &evt, portMAX_DELAY)) {
             ESP_LOGD(TAG, "Received event from source ID %lu", (unsigned long)evt->source);
             QueueHandle_t target_queue = find_service_queue(evt->source);
-            if (target_queue) {
+            if(target_queue == 0){
+                ESP_LOGW(TAG, "handle by event loop: ID %lu", (unsigned long)evt->source);
+                if (evt->payload) free(evt->payload);
+            }
+            else if (target_queue) {
                 // 将 payload 发送给目标服务队列（注意：这里发送的是 payload 指针，而不是 evt 本身）
                 if (xQueueSend(target_queue, &evt->payload, 0) != pdTRUE) {
                     ESP_LOGW(TAG, "Target queue full, dropping event from source %lu", (unsigned long)evt->source);
@@ -109,39 +112,4 @@ void event_loop_service_init(void){
     xTaskCreate(event_loop_task, "event_loop_task", 4096, NULL, 10, &event_loop_task_handle);
     ESP_LOGI(TAG, "Initialized");
 }
-
-
-
-
-
-
-// /*
-// 事件转发中心
-// */
-// static void event_loop_task(void *pvParameters)
-// {
-
-//     ESP_LOGI(TAG,"start event loop task");
-//     app_event_t *evt;
-//     while(1){
-//         // 事件转化
-//         if (xQueueReceive(main_event_queue, &evt, portMAX_DELAY)){
-//             ESP_LOGI(TAG,"rec req");
-//             switch (evt->source) {
-//                 case EVENT_SRC_WIFI: {
-//                     // 请求wifi服务
-//                     extern QueueHandle_t wifi_service_request_queue;
-//                     xQueueSend(wifi_service_request_queue, &evt->payload, 0);
-//                     break;
-//                 }           
-//                 default:
-//                     ESP_LOGW(TAG, "Unknown req: %d", evt->source);
-//                     break;
-//             }
-//             // 只转发payload，清理事件壳
-//             free(evt);
-//         }
-//     }
-    
-// }
 

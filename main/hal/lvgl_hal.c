@@ -22,7 +22,7 @@
 #include "driver/ledc.h"
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
-#include "driver/i2c_master.h"  // I2C 驱动
+#include "driver/i2c.h"  // I2C 驱动
 #include "lvgl.h"
 #include "hal/it7259_hal.h"  // IT7259 触摸驱动
 #include "hal/lvgl_hal.h"
@@ -115,6 +115,32 @@ static void increase_lvgl_tick(void *arg)
     lv_tick_inc(LVGL_TICK_PERIOD_MS);
 }
 
+static void i2c_scan_simple(void) {
+    ESP_LOGI(TAG, "Scanning I2C bus...");
+    
+    int device_count = 0;
+    for (uint8_t addr = 0x01; addr <= 0x7F; addr++) {
+        i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+        i2c_master_start(cmd);
+        i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_WRITE, true);
+        i2c_master_stop(cmd);
+        
+        esp_err_t ret = i2c_master_cmd_begin(I2C_NUM, cmd, pdMS_TO_TICKS(50));
+        i2c_cmd_link_delete(cmd);
+        
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "Found device at address: 0x%02X", addr);
+            device_count++;
+        }
+    }
+    
+    if (device_count == 0) {
+        ESP_LOGW(TAG, "No I2C devices found. Check wiring and pull-up resistors.");
+    } else {
+        ESP_LOGI(TAG, "Total devices found: %d", device_count);
+    }
+}
+
 lv_disp_t* lvgl_hal_init(void)
 {
 
@@ -123,7 +149,7 @@ lv_disp_t* lvgl_hal_init(void)
 
     // =========================== 初始化液晶屏背光 ====================================
     lvgl_hal_brightness_init();
-    lvgl_hal_set_brightness(60);
+    lvgl_hal_set_brightness(70);
 
     // =========================lcd初始化=====================================================
     ESP_LOGI(TAG, "Initialize SPI bus");
@@ -149,8 +175,9 @@ lv_disp_t* lvgl_hal_init(void)
     esp_lcd_panel_handle_t panel_handle = NULL;
     esp_lcd_panel_dev_config_t panel_config = {
         .reset_gpio_num = PIN_NUM_LCD_RST,
-        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
+        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR,
         .bits_per_pixel = 16,
+        .data_endian = LCD_RGB_DATA_ENDIAN_BIG,
     };
     ESP_LOGI(TAG, "Install GC9A01 panel driver");
     ESP_ERROR_CHECK(esp_lcd_new_panel_gc9a01(panel_io_handle, &panel_config, &panel_handle));
@@ -162,40 +189,31 @@ lv_disp_t* lvgl_hal_init(void)
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
 
     // ==========================touch初始化====================================================
-    i2c_master_bus_handle_t codec_i2c_bus;
-
-    // Initialize I2C peripheral
-    i2c_master_bus_config_t i2c_bus_cfg1 = {
-        .i2c_port = I2C_NUM,
-        .sda_io_num = I2C_SDA,
-        .scl_io_num = I2C_SCL,
-        .clk_source = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt = 7,
-        .intr_priority = 0,
-        .trans_queue_depth = 0,
-        .flags = {
-            .enable_internal_pullup = 1,
-        },
-    };
-    ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_cfg1, &codec_i2c_bus));
-
+    // // 用旧版驱动安装 I2C 总线
+    // i2c_config_t i2c_conf = {
+    //     .mode = I2C_MODE_MASTER,
+    //     .sda_io_num = I2C_SDA,
+    //     .scl_io_num = I2C_SCL,
+    //     .sda_pullup_en = GPIO_PULLUP_ENABLE,
+    //     .scl_pullup_en = GPIO_PULLUP_ENABLE,
+    //     .master.clk_speed = 400000,
+    //     .clk_flags = 0,
+    // };
+    // ESP_ERROR_CHECK(i2c_param_config(I2C_NUM, &i2c_conf));
+    // ESP_ERROR_CHECK(i2c_driver_install(I2C_NUM, I2C_MODE_MASTER, 0, 0, 0));
+    // audio_service中初始化了iic，I2C_NUM0
+    i2c_scan_simple();
+    // 2. 配置触摸 IO （使用旧 API，注意不是 _v2）
     esp_lcd_panel_io_i2c_config_t tp_io_config = {
-        .dev_addr = ESP_LCD_TOUCH_IO_I2C_TOUCH_ADDRESS, 
-        .control_phase_bytes = 1,           
-        .dc_bit_offset = 0,                 
-        .lcd_cmd_bits = 8,                  
-        .flags =                            
-        {                                   
-            .disable_control_phase = 1,     
+        .dev_addr = ESP_LCD_TOUCH_IO_I2C_TOUCH_ADDRESS,
+        .control_phase_bytes = 1,
+        .dc_bit_offset = 0,
+        .lcd_cmd_bits = 8,
+        .flags = {
+            .disable_control_phase = 1,
         },
-        .scl_speed_hz = 400000,                              
     };
-
-    ESP_LOGI(TAG, "Initialize touch IO (I2C)");
-
-    /* Touch IO handle */
-    ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c_v2(codec_i2c_bus, &tp_io_config, &panel_io_handle));
-
+    ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(I2C_NUM, &tp_io_config, &panel_io_handle));
     esp_lcd_touch_config_t tp_cfg = {
         .x_max = LCD_V_RES,
         .y_max = LCD_H_RES,
