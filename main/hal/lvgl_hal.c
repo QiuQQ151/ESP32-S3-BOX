@@ -1,12 +1,3 @@
-
-
-
-
-
-
-
-
-
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -26,7 +17,7 @@
 #include "lvgl.h"
 #include "hal/it7259_hal.h"  // IT7259 触摸驱动
 #include "hal/lvgl_hal.h"
-#include "power_io_hal.h"
+
 
 
 

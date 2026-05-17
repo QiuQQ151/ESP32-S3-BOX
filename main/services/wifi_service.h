@@ -26,7 +26,6 @@ typedef struct {
     char ssid[33];
     char password[65];
     bool save;                   // 是否保存至 NVS
-    QueueHandle_t reply_queue;   // 结果通知队列 (可为 NULL)
 } wifi_service_receive_data_t;
 
 
@@ -49,7 +48,7 @@ typedef enum {
 
 // 服务发给reply_queue的数据结构
 typedef struct {
-    char ssid[33];          // 动态分配，接收方负责 free
+    char ssid[33];        // 动态分配，接收方负责 free
     char password[65];    // 动态分配，接收方负责 free
     char ip_address[20];
     int8_t rssi;

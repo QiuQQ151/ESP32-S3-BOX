@@ -1,6 +1,7 @@
 #pragma once
 // system_event.h
-
+#include "esp_err.h"
+#include "freertos/queue.h"
 
 // 定义来源
 typedef enum{
@@ -11,6 +12,7 @@ typedef enum{
   POWER_SERVICE,
   LED_SERVICE,
   AUDIO_SERVICE,
+  KEYHAL_SERVICE,
 } service_id_t;
 
 // 定义事件类型

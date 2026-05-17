@@ -9,18 +9,17 @@ typedef enum {
     SNTP_CMD_GET_TIME = 0,             // 查询sntp时间
 } sntp_service_cmd_t;
 typedef struct {
-    uint32_t cmd;  // 请求服务
-    QueueHandle_t reply_queue;   // 结果通知队列 (可为 NULL)
+    sntp_service_cmd_t cmd;  // 请求服务
 } sntp_service_receive_data_t;
 
 
 // ==================服务回复
 typedef enum {
     // 当前状态
-    SNTP_SRV_OK = 0,    
-    SNTP_SRV_STATE_ERROR, // 响应错误
-    SNTP_SRV_ERR_WIFI,    
-    SNTP_SRV_ERR_INT,
+    SNTP_SERVICE_OK = 0,    
+    SNTP_SERVICE_ERR_WIFI,   // WiFi连接错误
+    SNTP_SERVICE_OK_WIFI,   // WiFi连接成功
+    SNTP_SERVICE_ERR_TIME,   // 时间同步错误
 } sntp_service_state_t;
 
 // 服务发给reply_queue的数据结构
@@ -39,6 +38,6 @@ typedef struct {
 
 
 esp_err_t sntp_service_init(void);  // 初始化sntp服务（由系统启动）   
-int get_sntp_service_ID(void);
+QueueHandle_t get_sntp_service_queue(void); // 获取sntp服务队列
 
 #endif

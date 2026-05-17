@@ -5,7 +5,7 @@
 #include "freertos/queue.h"
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "event_loop_service.h"   // 提供 app_event_t, get_main_event_queue()
+#include "system_event.h"   // 
 #include "ui_service.h"  // 默认往ui_service发送按键事件
 
 static const char *TAG = "KEY_HAL";
@@ -49,11 +49,6 @@ typedef struct {
  */
 static void send_to_service(key_id_t id, key_event_type_t type, int rotate_diff)
 {
-    if (s_target_service_id == -1) {
-        ESP_LOGW(TAG, "Target service not set, event dropped");
-        return;
-    }
-
     // 分配 payload（最里层）
     key_event_data_t *payload = malloc(sizeof(key_event_data_t));
     if (!payload) {
@@ -64,35 +59,27 @@ static void send_to_service(key_id_t id, key_event_type_t type, int rotate_diff)
     payload->event = type;
     payload->rotate_diff = rotate_diff;
 
-    // 分配中间层（按ui_service要求）
-    ui_service_receive_data_t *evt_data = malloc(sizeof(ui_service_receive_data_t));
-    if (!evt_data) {
-        ESP_LOGE(TAG, "Failed to allocate event data");
-        return;
-    }
-    evt_data->cmd = UI_CMD_KEY_EVENT; //按键事件
-    evt_data->reply_queue = NULL;
-    evt_data->data = payload;
-    evt_data->data_len = sizeof(key_event_data_t);
-
     // 分配事件外壳（最外层）
-    app_event_t *evt = malloc(sizeof(app_event_t));
+    event_data_t *evt = malloc(sizeof(event_data_t));
     if (!evt) {
-        ESP_LOGE(TAG, "Failed to allocate app_event");
-        free(evt_data);
+        ESP_LOGE(TAG, "Failed to allocate system_event");
+        free(payload);
         return;
     }
-    evt->source = s_target_service_id;
-    evt->payload = evt_data;
+    evt->service_id = KEYHAL_SERVICE;
+    evt->event_type = NOTIFICATION;
+    evt->reply_queue = NULL;
+    evt->data = payload;
+    evt->data_len = sizeof(key_event_data_t);
 
     // 发送到主事件队列
-    QueueHandle_t main_queue = get_main_event_queue();
-    if (main_queue && xQueueSend(main_queue, &evt, 0) != pdTRUE) {
-        ESP_LOGW(TAG, "Main event queue full, event dropped");
-        free(evt_data);
+    QueueHandle_t ui_queue = get_ui_service_queue();
+    if (ui_queue && xQueueSend(ui_queue, &evt, 0) != pdTRUE) {
+        ESP_LOGW(TAG, "UI event queue full, event dropped");
+        free(payload);
         free(evt);
     }
-    ESP_LOGW(TAG, "send keys event to main queue");
+    ESP_LOGW(TAG, "send keys event to ui queue");
     // 注意：事件循环任务会在收到后释放 evt，并转发 payload 到目标服务队列；
     // 目标服务负责最终释放 payload。
 }
@@ -100,7 +87,7 @@ static void send_to_service(key_id_t id, key_event_type_t type, int rotate_diff)
 /**
  * @brief 按键处理任务（去抖动、发送事件）
  */
-#define ENCODER_MIN_STEPS  5   // 旋转步数阈值，可根据需要调整
+#define ENCODER_MIN_STEPS  2   // 旋转步数阈值，可根据需要调整
 static void key_hal_task(void *arg)
 {
     hal_key_event_t evt;
@@ -152,45 +139,6 @@ static void key_hal_task(void *arg)
         }
     }
 }
-// static void key_hal_task(void *arg)
-// {
-//     hal_key_event_t evt;
-//     uint32_t now_us;
-//     const uint32_t DEBOUNCE_US = 50000; // 50ms
-
-//     while (1) {
-//         if (xQueueReceive(s_event_queue, &evt, portMAX_DELAY) == pdTRUE) {
-//             if (evt.is_rotate) {
-//                 // 旋转事件直接发送
-//                 key_event_type_t type = (evt.rotate_dir == 1) ?
-//                                         KEY_EVENT_ROTATE_CW : KEY_EVENT_ROTATE_CCW;
-//                 send_to_service(evt.key_id, type, evt.rotate_dir);
-//                 continue;
-//             }
-
-//             // 按键事件：去抖动
-//             key_config_t *cfg = NULL;
-//             for (int i = 0; i < s_num_keys; i++) {
-//                 if (s_key_configs[i].id == evt.key_id) {
-//                     cfg = &s_key_configs[i];
-//                     break;
-//                 }
-//             }
-//             if (!cfg || cfg->pin == -1) continue;
-
-//             now_us = esp_timer_get_time();
-//             if ((now_us - cfg->last_tick) > DEBOUNCE_US) {
-//                 int level = gpio_get_level(cfg->pin);
-//                 if (level != cfg->last_stable_state) {
-//                     cfg->last_stable_state = level;
-//                     cfg->last_tick = now_us;
-//                     key_event_type_t type = (level == 0) ? KEY_EVENT_PRESS : KEY_EVENT_RELEASE;
-//                     send_to_service(evt.key_id, type, 0);
-//                 }
-//             }
-//         }
-//     }
-// }
 
 /**
  * @brief GPIO 中断处理函数
@@ -261,8 +209,6 @@ static esp_err_t init_encoder_rotary(int clk_pin, int dt_pin)
 
 esp_err_t key_hal_init(void)
 {
-    s_target_service_id = get_ui_service_ID(); //直接发到ui
-
     s_encoder_clk_pin = 10;
     s_encoder_dt_pin  = 9;
 
@@ -308,7 +254,7 @@ esp_err_t key_hal_init(void)
     }
 
     // 创建按键处理任务
-    xTaskCreate(key_hal_task, "key_hal_task", 4096, NULL, 2, NULL);
+    xTaskCreate(key_hal_task, "key_hal_task", 4096, NULL, 5, NULL);
 
     ESP_LOGI(TAG, "Key HAL initialized, target service ID = %d", s_target_service_id);
     return ESP_OK;

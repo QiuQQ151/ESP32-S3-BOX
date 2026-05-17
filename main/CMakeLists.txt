@@ -7,27 +7,29 @@ set(SOURCES
 
     
     # HAL - 核心驱动
-    # hal/tca9535_hal.c  # IO扩展
-   
-    # hal/it7259_hal.c  # LCD触摸
-    # hal/lvgl_hal.c  # LCD
     hal/wifi_hal.c  # wifi
-    # hal/keys_hal.c  # 按键
-    # hal/sd_hal.c #SD卡
-    # hal/power_io_hal.c #电源使能
+    hal/tca9535_hal.c  # IO扩展
+    hal/power_hal.c #电源使能
+    hal/led_hal.c # led
+    hal/sd_hal.c #SD卡
+
+    hal/it7259_hal.c  # LCD触摸
+    hal/lvgl_hal.c  # LCD
+    hal/keys_hal.c  # 按键
+    
+    
     
     # Service - 核心服务
+    services/wifi_service.c   # wifi服务
+    services/audio_service.c  # 音频 
+    services/sntp_service.c # 校时服务 
+    #services/led_service.c  # 灯效   
+    services/ui_service.c   # 界面
     # services/power_service.c  # 电源服务
-    # services/event_loop_service.c # 事件转发
-    services/wifi_service.c # wifi服务
-    # services/sntp_service.c # 校时服务
-    # services/ui_service.c   # 界面
-    # services/led_service.c  # 灯效
-    # services/audio_service.c  # 音频
     
     # App 层
-    # app/desktop_app.c
-    # app/radio_app.c
+    app/desktop_app.c
+    app/radio_app.c
 
     # 附加文件
     canon.pcm

@@ -96,6 +96,7 @@ static void wifi_service_task(void *arg)
                     } 
                     case WIFI_CMD_CHEACK_STATA:{
                         // 查询WiFi状态
+                        ESP_LOGI(TAG, "Handle Checking WiFi status");
                         handle_cheack_stata(payload);
                         break;
                     }             
@@ -103,6 +104,13 @@ static void wifi_service_task(void *arg)
                         ESP_LOGW(TAG, "Unknown cmd: 0x%lx", payload->cmd);
                         break;
                 }
+                if( evt_data->reply_queue){
+                    ESP_LOGI(TAG, "Reply to request");
+                    handle_reply(evt_data->reply_queue);
+                } else {
+                    ESP_LOGW(TAG, "No reply queue for request");
+                }
+                
             } else {
                 ESP_LOGW(TAG, "Unknown event type: %d", evt_data->event_type);
             }
@@ -139,10 +147,6 @@ static void handle_connect(const wifi_service_receive_data_t *payload){
     } else {
         service_state = WIFI_SRV_STATE_ERROR;
     }
-    // 构造回复
-    if(payload->reply_queue){
-         handle_reply(payload->reply_queue);
-    }
 
 }
 
@@ -162,10 +166,6 @@ static void handle_connect_save(const wifi_service_receive_data_t *payload){
         } else {
             service_state = WIFI_SRV_STATE_ERROR;
         }
-        // 构造回复
-        if(payload->reply_queue){
-            handle_reply(payload->reply_queue);
-        }
     }
     else {
       ESP_LOGI(TAG, "loading credentials err");   
@@ -182,11 +182,6 @@ static void handle_disconnect(const wifi_service_receive_data_t *payload){
         strcpy(sr_ip_address, "\0");
     } else{
       service_state = WIFI_SRV_STATE_ERROR;
-    }
-     
-    // 构造回复
-    if(payload->reply_queue){
-        handle_reply(payload->reply_queue);
     }
 }
 
@@ -209,10 +204,6 @@ static void handle_cheack_stata(const wifi_service_receive_data_t *payload){
     }
     // 
     sr_rsssi = wifi_hal_get_rssi();
-    // 构造回复
-    if(payload->reply_queue){
-        handle_reply(payload->reply_queue);
-    }
 }
 
 // 回复请求
@@ -225,7 +216,15 @@ static void handle_reply(QueueHandle_t reply_queue){
         strcpy(payload->ip_address, sr_ip_address);
         payload->rssi = sr_rsssi;
         payload->service_stata = service_state;
-        xQueueSend(reply_queue, &payload, 0);
+
+        // 事件外壳
+        event_data_t* evt_data = (event_data_t*)malloc(sizeof(event_data_t));
+        evt_data->service_id = WIFI_SERVICE; // 标识服务来源
+        evt_data->event_type = NOTIFICATION; // 事件类型
+        evt_data->reply_queue = NULL;
+        evt_data->data = payload;
+        evt_data->data_len = sizeof(wifi_service_send_data_t);
+        xQueueSend(reply_queue, &evt_data, 0);
     } 
     else{
         ESP_LOGE(TAG,"malloc wifi_service_send_data_t err");

@@ -32,7 +32,7 @@
 #define ES8311_MCLK_SOURCE        0      /* 0 From MCLK of esp32   1 From BCLK */
 
 
-#define BOARD_PA_GAIN             (20) /* Power amplifier gain defined by board (dB) */
+#define BOARD_PA_GAIN             (6) /* Power amplifier gain defined by board (dB) */
 
 #define SDCARD_PWR_CTRL             -1
 #define ESP_SD_PIN_CLK              -1
