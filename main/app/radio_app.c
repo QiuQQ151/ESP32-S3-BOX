@@ -32,6 +32,7 @@ static struct {
     lv_obj_t *channel_label;
     lv_obj_t *play_btn;
     lv_obj_t *play_icon;
+    lv_obj_t *volume_slider;   // 新增音量滑块
     bool playing;
 } s_radio_ui = {0};
 
@@ -95,6 +96,7 @@ static const int station_count = sizeof(stations) / sizeof(stations[0]);
 
 static int selected_station_index = 0;   // 当前选中的电台索引
 static int volume = 50; // 输出音量 0-100
+
 // ---------- 内部函数声明 ----------
 static void radio_on_create(ui_app_t *app);
 static void radio_on_open(ui_app_t *app);
@@ -102,7 +104,7 @@ static void radio_on_close(ui_app_t *app);
 static void radio_on_destroy(ui_app_t *app);
 static void radio_on_event(ui_app_t *app, event_data_t *event);
 static bool radio_handle_key_event(key_event_data_t *key);
-// static void radio_app_led_control(led_mode_t mode); // 控制LED模式
+static void radio_app_led_control(led_mode_t mode, uint32_t arg);
 static void radio_handle_change_to_audio(audio_service_cmd_t cmd);
 static void radio_update_status_task(void *arg);
 static void radio_update_time(void);
@@ -120,6 +122,7 @@ static void play_btn_event_cb(lv_event_t *e)   { radio_play_pause(); }
 static void prev_btn_event_cb(lv_event_t *e)   { radio_prev_channel(); }
 static void next_btn_event_cb(lv_event_t *e)   { radio_next_channel(); }
 static void refresh_btn_event_cb(lv_event_t *e){ radio_refresh(); }
+static void volume_slider_event_cb(lv_event_t *e); // 新增滑块回调
 
 // ========== 注册函数 ==========
 void radio_app_register(void)
@@ -163,13 +166,12 @@ static void radio_on_create(ui_app_t *app)
     // ---------- 频道滚动 + 刷新按钮 ----------
     lv_obj_t *channel_area = lv_obj_create(app->screen);
     lv_obj_set_size(channel_area, 180, 36);
-    lv_obj_align(channel_area, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_align(channel_area, LV_ALIGN_CENTER, 0, -30);
     lv_obj_set_style_bg_opa(channel_area, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(channel_area, 0, 0);
     lv_obj_set_style_pad_all(channel_area, 0, 0);
 
     s_radio_ui.channel_label = lv_label_create(channel_area);
-    // 初始化显示第一个电台名称
     lv_label_set_text(s_radio_ui.channel_label,
                       (station_count > 0) ? stations[selected_station_index].name : "无电台");
     lv_obj_set_style_text_color(s_radio_ui.channel_label, lv_color_white(), 0);
@@ -192,10 +194,18 @@ static void radio_on_create(ui_app_t *app)
     lv_img_set_src(refresh_img, &icon_reflash_28);
     lv_obj_center(refresh_img);
 
+    // ---------- 音量滑块（频道区域与底部控制栏之间）----------
+    s_radio_ui.volume_slider = lv_slider_create(app->screen);
+    lv_obj_set_size(s_radio_ui.volume_slider, 160, 10);
+    lv_obj_align_to(s_radio_ui.volume_slider, channel_area, LV_ALIGN_OUT_BOTTOM_MID, 0, 10);
+    lv_slider_set_range(s_radio_ui.volume_slider, 0, 100);
+    lv_slider_set_value(s_radio_ui.volume_slider, volume, LV_ANIM_OFF);
+    lv_obj_add_event_cb(s_radio_ui.volume_slider, volume_slider_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
     // ---------- 底部控制栏 ----------
     lv_obj_t *control_bar = lv_obj_create(app->screen);
     lv_obj_set_size(control_bar, 180, 55);
-    lv_obj_align(control_bar, LV_ALIGN_BOTTOM_MID, 0, -40);
+    lv_obj_align(control_bar, LV_ALIGN_BOTTOM_MID, 0, -30);
     lv_obj_set_style_bg_opa(control_bar, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(control_bar, 0, 0);
     lv_obj_set_style_pad_all(control_bar, 0, 0);
@@ -242,6 +252,7 @@ static void radio_on_create(ui_app_t *app)
        // 启动状态更新任务
     xTaskCreate(radio_update_status_task, "radio_update_status", 4096, NULL, 5,
                 &radio_update_status_task_handle);
+    radio_app_led_control(LED_MODE_MUSIC, 100);
     ESP_LOGI(TAG, "Radio UI created");
 }
 
@@ -273,7 +284,8 @@ static void radio_on_destroy(ui_app_t *app)
 
     // 释放内存
     memset(&s_radio_ui, 0, sizeof(s_radio_ui));
-    app->screen = NULL;}
+    app->screen = NULL;
+}
 
 static void radio_on_event(ui_app_t *app, event_data_t *event)
 {
@@ -323,6 +335,8 @@ static bool radio_handle_key_event(key_event_data_t *key)
                 evt->data = cmd;
                 evt->data_len = sizeof(ui_service_receive_data_t);
                 xQueueSend(get_ui_service_queue(), &evt, 0);
+                ESP_LOGI(TAG, "send ui_event to ui_service_queue");
+                radio_app_led_control(LED_MODE_BREATH, 100);
                 return true;
             }
             default: return true;
@@ -381,7 +395,7 @@ static void radio_play_pause(void)
         s_radio_ui.playing = true;
         radio_handle_change_to_audio(AUDIO_CMD_PLAY);
     }
-    // radio_app_led_control(LED_MODE_ALERT);
+    radio_app_led_control(LED_MODE_ALERT, 0);
 }
 
 static void radio_prev_channel(void)
@@ -407,22 +421,18 @@ static void radio_next_channel(void)
 }
 
 static void radio_handle_change_to_audio(audio_service_cmd_t cmd){
-    //s_radio_ui
-    //  发送音频服务请求
     audio_service_receive_data_t* audio_payload = malloc(sizeof(audio_service_receive_data_t));
     if(!audio_payload){
         ESP_LOGE(TAG,"malloc audio_service_receive_data_t err");
     } else{
-        // 分配payload数据
-        audio_payload->cmd = cmd; // 请求服务类型
-        strcpy(audio_payload->url, stations[selected_station_index].url); // 连接URL
-        audio_payload->prv_type = http_str; // 前端类型
-        audio_payload->midle_type = stations[selected_station_index].type; // 中间件类型
-        audio_payload->back_type = i2s_hal; // 后端类型
+        audio_payload->cmd = cmd;
+        strcpy(audio_payload->url, stations[selected_station_index].url);
+        audio_payload->prv_type = http_str;
+        audio_payload->midle_type = stations[selected_station_index].type;
+        audio_payload->back_type = i2s_hal;
         audio_payload->volume = volume;
         audio_payload->start_after_connect = s_radio_ui.playing;
 
-        // 分配event_data_t
         event_data_t *evt_data = malloc(sizeof(event_data_t));
         if(!evt_data){
             ESP_LOGE(TAG,"malloc event_data_t err");
@@ -436,59 +446,69 @@ static void radio_handle_change_to_audio(audio_service_cmd_t cmd){
             xQueueSend(get_audio_service_queue(), &evt_data, 0);
         }
     }
+}
 
+// 新增滑块回调：拖动滑块时更新音量
+static void volume_slider_event_cb(lv_event_t *e)
+{
+    lv_obj_t *slider = lv_event_get_target(e);
+    int val = lv_slider_get_value(slider);
+    if (val != volume) {
+        volume = val;
+        radio_handle_change_to_audio(AUDIO_CMD_VOLUME);
+        radio_app_led_control(LED_MODE_VOLUME, volume);
+        ESP_LOGI(TAG, "Volume slider set to %d", volume);
+    }
 }
 
 static void radio_increase_volume(void) { 
     ESP_LOGI(TAG, "increase volume"); 
-    volume+=5;
+    volume += 1;
     if(volume > 100) volume = 100;
+    if(s_radio_ui.volume_slider) {
+        lv_slider_set_value(s_radio_ui.volume_slider, volume, LV_ANIM_OFF);
+    }
     radio_handle_change_to_audio(AUDIO_CMD_VOLUME);
-    // radio_app_led_control(LED_MODE_VOLUME);
+    radio_app_led_control(LED_MODE_VOLUME, volume);
 }
+
 static void radio_decrease_volume(void) { 
     ESP_LOGI(TAG, "decrease volume"); 
-    volume-=5;
+    volume -= 1;
     if(volume < 0) volume = 0;
+    if(s_radio_ui.volume_slider) {
+        lv_slider_set_value(s_radio_ui.volume_slider, volume, LV_ANIM_OFF);
+    }
     radio_handle_change_to_audio(AUDIO_CMD_VOLUME);
-   // radio_app_led_control(LED_MODE_VOLUME);
+    radio_app_led_control(LED_MODE_VOLUME, volume);
 }
 
 static void radio_refresh(void)
 {
-    // 可重新加载电台列表或当前电台信息
     ESP_LOGI(TAG, "refresh, current: %s", stations[selected_station_index].name);
 }
 
-
-// static void radio_app_led_control(led_mode_t mode) {
-
-//     // 对前板执行
-//     led_service_receive_data_t *payload = (led_service_receive_data_t *)malloc(sizeof(led_service_receive_data_t));
-//     if (payload){
-//         memset(payload, 0, sizeof(led_service_receive_data_t));
-//         payload->cmd = LED_CMD_SET_MODE;
-//         payload->device = LED_FRONT;
-//         payload->mode = mode; //
-//         payload->brightness = 20; // 亮度
-//         payload->volume = volume;
-//         payload->alert_count = 2;
+static void radio_app_led_control(led_mode_t mode, uint32_t arg) {
+    led_service_receive_data_t* led_payload = (led_service_receive_data_t*)malloc(sizeof(led_service_receive_data_t));
+    if(led_payload){
+        led_payload->device = LED_HAL_DEVICE_FRONT;
+        led_payload->mode = mode;
+        led_payload->brightness = 40;
+        led_payload->arg = arg;
         
-//         // 外壳
-//         event_data_t *evt = (event_data_t *)malloc(sizeof(event_data_t));
-//         if (!evt) {
-//             free(payload);
-//             return;
-//         }
-//         evt->service_id  = UI_SERVICE;      // 根据实际枚举调整
-//         evt->event_type  = REQUEST;
-//         evt->reply_queue = NULL;
-//         evt->data        = payload;
-//         evt->data_len    = sizeof(led_service_receive_data_t);
-//         xQueueSend(get_led_service_queue(), &evt, 0);
-//         ESP_LOGI(TAG, "send led mode: %d", mode);
-//         return;
-//     }
-//     ESP_LOGE(TAG, "malloc led_service_receive_data_t err");
-// }
-
+        event_data_t* led_event = (event_data_t*)malloc(sizeof(event_data_t));
+        if(led_event){
+            led_event->service_id = HAL;
+            led_event->event_type = REQUEST;
+            led_event->data = led_payload;
+            led_event->data_len = sizeof(led_service_receive_data_t);
+            xQueueSend(get_led_service_queue(), &led_event, 0);
+            ESP_LOGI(TAG, "send led_event to led_service_queue");
+        } else{
+            ESP_LOGE(TAG, "malloc led_event failed");
+            free(led_payload);
+        }
+    } else {
+        ESP_LOGE(TAG, "malloc led_service_receive_data_t err");
+    }
+}

@@ -4,6 +4,7 @@
 #include "esp_log.h"
 #include "lvgl.h"
 #include "desktop_app.h"
+#include "led_service.h"         // led_service_set_panel_mode
 #include "ui_service.h"          // ui_service_get_last_launched_app
 #include "system_event.h"        // event_data_t, NOTIFICATION, KEYHAL_SERVICE
 #include "keys_hal.h"            // key_event_data_t, KEY_EVENT_*, KEY_ID_*
@@ -132,6 +133,30 @@ static void desktop_on_create(ui_app_t *app)
     current_item_index = 0;
     desktop_update_display();
     app->screen = desktop_screen;
+
+    // 请求LED服务设置模式
+    led_service_receive_data_t* led_payload = (led_service_receive_data_t*)malloc(sizeof(led_service_receive_data_t));
+    if(led_payload){
+        led_payload->device = LED_HAL_DEVICE_FRONT;
+        led_payload->mode = LED_MODE_BREATH;
+        led_payload->brightness = 100;
+        led_payload->arg = 0;
+        
+        event_data_t* led_event = (event_data_t*)malloc(sizeof(event_data_t));
+        if(led_event){
+            led_event->service_id = HAL;
+            led_event->event_type = REQUEST;
+            led_event->data = led_payload;
+            led_event->data_len = sizeof(led_service_receive_data_t);
+            xQueueSend(get_led_service_queue(), &led_event, 0);
+            ESP_LOGI(TAG, "send led_event to led_service_queue");
+        } else{
+            ESP_LOGE(TAG, "malloc led_event failed");
+            free(led_payload);
+        }
+    } else {
+        ESP_LOGE(TAG, "malloc led_service_receive_data_t err");
+    }
 }
 
 static void desktop_on_open(ui_app_t *app)

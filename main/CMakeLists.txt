@@ -10,7 +10,7 @@ set(SOURCES
     hal/wifi_hal.c  # wifi
     hal/tca9535_hal.c  # IO扩展
     hal/power_hal.c #电源使能
-    hal/led_hal.c # led
+    #hal/led_hal.c # led
     hal/sd_hal.c #SD卡
 
     hal/it7259_hal.c  # LCD触摸
@@ -23,13 +23,15 @@ set(SOURCES
     services/wifi_service.c   # wifi服务
     services/audio_service.c  # 音频 
     services/sntp_service.c # 校时服务 
-    #services/led_service.c  # 灯效   
+    services/led_service.c  # 灯效   
     services/ui_service.c   # 界面
     # services/power_service.c  # 电源服务
     
     # App 层
     app/desktop_app.c
     app/radio_app.c
+    app/music_app.c
+    
 
     # 附加文件
     canon.pcm

@@ -87,7 +87,7 @@ static void send_to_service(key_id_t id, key_event_type_t type, int rotate_diff)
 /**
  * @brief 按键处理任务（去抖动、发送事件）
  */
-#define ENCODER_MIN_STEPS  2   // 旋转步数阈值，可根据需要调整
+#define ENCODER_MIN_STEPS  3   // 旋转步数阈值，可根据需要调整
 static void key_hal_task(void *arg)
 {
     hal_key_event_t evt;

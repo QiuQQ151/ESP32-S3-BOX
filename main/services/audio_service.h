@@ -20,6 +20,7 @@ typedef enum {
     aac_dec,
     mp3_dec,
     flac_dec,
+    wav_dec,
     // 后端类型
     i2s_hal,
 } audio_service_stream_type_t;

@@ -1,44 +1,36 @@
-#pragma once
-#include "esp_err.h"
-#include "freertos/queue.h"
+#ifndef LED_HAL_H
+#define LED_HAL_H
 
-/* ========== 模式枚举 ========== */
+#include "esp_err.h"
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef enum {
+    LED_HAL_DEVICE_FRONT     = 0,
+    LED_HAL_DEVICE_EXTENSION = 1,
+    LED_HAL_DEVICE_MAX       = 2,
+} led_hal_device_t;
+
 typedef enum {
     LED_MODE_OFF = 0,
-    LED_MODE_BREATH,         // 呼吸 （白色呼吸）
-    LED_MODE_RAINBOW,        // 彩虹旋转（指生成一圈渐变色，然后不断旋转）
-    LED_MODE_CLOCK,          // 时钟（是番茄时钟，由外部传入种时长后，由内部去计时）
-    LED_MODE_BULB,             // 灯泡 （白色常量）
-    LED_MODE_MUSIC,          // 音乐
-    LED_MODE_VOLUME,         // 音量指示（通知）
-    LED_MODE_ALERT,          // 警告闪烁（通知）
+    LED_MODE_BREATH,
+    LED_MODE_CLOCK,
+    LED_MODE_BULB,
+    LED_MODE_MUSIC,
+    LED_MODE_RUN,
+    LED_MODE_VOLUME,         // 临时模式（3秒后恢复）
+    LED_MODE_ALERT,          // 临时模式（闪3次后恢复）
 } led_mode_t;
-
-typedef enum {
-    LED_FRONT = 0,
-    LED_EXTENSION,
-    LED_DEVICE_MAX
-} led_device_t;
-
-/* ========== 指令 ========== */
-typedef enum {
-    LED_CMD_SET_MODE = 0,       // 设置模式
-    LED_CMD_SET_BRIGHTNESS,     // 设置亮度
-    LED_CMD_GET_STATUS,         // 获取状态（需提供 reply_queue）
-} led_service_cmd_t;
 
 /* ========== 扁平服务请求结构 ========== */
 typedef struct {
-    led_service_cmd_t   cmd;            // 指令
-    led_device_t        device;         // 设备
+    led_hal_device_t    device;         // 设备
     led_mode_t          mode;           // 模式（关灯/氛围灯/通知）
     uint8_t             brightness;     // 亮度 0-255 （每次设置都有效）
-    uint8_t             volume;         // 音量 0-100（模式为音量时有效）
-    uint8_t             alert_count;    // 警告闪烁次数（模式为警告时有效）
-    // 时钟专用
-    uint8_t             clock_hour;     // 时 0-23
-    uint8_t             clock_minute;   // 分 0-59
-    uint8_t             clock_second;   // 秒 0-59
+    uint32_t            arg;            // 附加参数：
 } led_service_receive_data_t;
 
 /* ========== 状态回复 ========== */
@@ -49,75 +41,124 @@ typedef enum {
 
 typedef struct {
     led_service_state_t service_state;
-    led_device_t        device;
+    led_hal_device_t        device;
     led_mode_t          current_mode;
     uint8_t             current_brightness;
 } led_service_send_data_t;
 
-/* ========== 接口 ========== */
+
+
 esp_err_t led_service_init(void);
 QueueHandle_t get_led_service_queue(void);
 
-// #pragma once
-// #include "led_strip.h"
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* LED_HAL_H */
+
+// #ifndef LED_HAL_H
+// #define LED_HAL_H
+
 // #include "esp_err.h"
-// #include "freertos/queue.h"
-// #include "freertos/FreeRTOS.h"
-// #include "freertos/task.h"
+// #include <stdint.h>
+
+// #ifdef __cplusplus
+// extern "C" {
+// #endif
 
 // typedef enum {
-//     LED_MODE_OFF = 0,        // 关闭LED
-//     LED_MODE_CLOCK,          // 时钟模式
-//     LED_MODE_MUSIC,          // 音乐模式
-//     LED_MODE_BREATH,         // 呼吸模式
-//     LED_MODE_RAINBOW,        // 彩虹模式
-//     LED_MODE_BULB,           // 灯泡模式
-//     LED_MODE_MAX,            // 模式最大值
+//     LED_HAL_DEVICE_FRONT     = 0,
+//     LED_HAL_DEVICE_EXTENSION = 1,
+//     LED_HAL_DEVICE_MAX       = 2,
+// } led_hal_device_t;
+
+// typedef enum {
+//     LED_MODE_OFF = 0,
+//     LED_MODE_BREATH,         // 白色呼吸
+//     LED_MODE_CLOCK,          // 番茄时钟（需先调用 led_hal_set_clock）
+//     LED_MODE_BULB,           // 白色常亮
+//     LED_MODE_MUSIC,          // 有机渐变
+//     LED_MODE_RUN,            // 跑马灯
+//     LED_MODE_VOLUME,         // 音量指示（临时）
+//     LED_MODE_ALERT,          // 警告闪烁（临时）
 // } led_mode_t;
 
+// /**
+//  * @brief 初始化 LED 硬件及效果任务
+//  */
+// esp_err_t led_hal_init(void);
+
+// /**
+//  * @brief 设置指定面板的永久模式与最大亮度
+//  * @param dev        面板
+//  * @param mode       模式（不可为 LED_MODE_VOLUME / LED_MODE_ALERT）
+//  * @param brightness 最大亮度 (1~255)
+//  */
+// esp_err_t led_hal_set_panel_mode(led_hal_device_t dev, led_mode_t mode, uint8_t brightness);
+
+// /**
+//  * @brief 启动番茄时钟（仅前面板）
+//  * @param total_seconds 倒计时总秒数 (1~3600)
+//  */
+// esp_err_t led_hal_set_clock(uint32_t total_seconds);
+
+// /**
+//  * @brief 触发音量指示（仅前面板，3秒后自动恢复原模式）
+//  * @param volume     音量值 0~255
+//  * @param brightness 最大亮度 (1~255)
+//  */
+// esp_err_t led_hal_set_volume(uint8_t volume, uint8_t brightness);
+
+// /**
+//  * @brief 触发警告闪烁（仅前面板，全红闪3次后自动恢复原模式）
+//  * @param brightness 最大亮度 (1~255)
+//  */
+// esp_err_t led_hal_alert(uint8_t brightness);
+
+// #ifdef __cplusplus
+// }
+// #endif
+
+// #endif
+
+// #pragma once
+// #include <stdint.h>
+// #include "esp_err.h"
+
+// #ifdef __cplusplus
+// extern "C" {
+// #endif
+
 // typedef enum {
-//     LED_FRONT = 0,           // 前置LED
-//     LED_EXTENSION,           // 扩展板LED
-//     LED_DEVICE_MAX,          // LED设备最大值
-// } led_device_t;
+//     LED_HAL_DEVICE_FRONT = 0,
+//     LED_HAL_DEVICE_EXTENSION,
+// } led_hal_device_t;
 
-// // 时钟模式需要的数据
-// typedef struct {
-//     uint8_t hour;           // 时钟模式：小时 (0-23)
-//     uint8_t minute;         // 时钟模式：分钟 (0-59)
-//     uint8_t second;         // 时钟模式：秒 (0-59)
-// } led_clock_data_t;
-
-// // ===============LED服务请求
 // typedef enum {
-//     LED_CMD_SET_MODE = 0,       // 设置LED模式
-//     LED_CMD_SET_BRIGHTNESS,     // 设置LED亮度
-//     LED_CMD_GET_STATUS,         // 获取LED状态
-// } led_service_cmd_t;
+//     LED_HAL_MODE_OFF = 0,
+//     LED_HAL_MODE_CLOCK,
+//     LED_HAL_MODE_BREATH,
+//     LED_HAL_MODE_RAINBOW,
+//     LED_HAL_MODE_BULB,
+//     LED_HAL_MODE_MUSIC,
+// } led_hal_mode_t;
 
-// typedef struct {
-//     led_service_cmd_t cmd;       // 请求命令
-//     led_device_t device;        // LED设备 (用于LED_DEVICE_CONTROL_CMD)
-//     led_mode_t mode;            // LED模式 (用于LED_MODE_SET_CMD)
-//     uint8_t brightness;         // 亮度值 0-255 (用于LED_BRIGHTNESS_SET_CMD)
-//     void* data;                 // 通用数据指针 (用于LED_GET_STATUS_CMD)
-// } led_service_receive_data_t;
+// esp_err_t led_hal_init(void);
 
+// // 设置模式（立即生效，重置动画相位）
+// void led_hal_set_mode(led_hal_device_t dev, led_hal_mode_t mode);
 
-// // ==================LED服务回复
-// typedef enum {
-//     LED_SERVICE_OK = 0,             // 服务响应成功
-//     LED_SERVICE_ERROR,              // 服务响应错误
-// } led_service_state_t;
+// // 设置亮度 0-255（下次 tick 生效）
+// void led_hal_set_brightness(led_hal_device_t dev, uint8_t brightness);
 
-// // 服务发给reply_queue的数据结构
-// typedef struct {
-//     led_service_state_t service_state;  // 服务回复状态
-//     led_device_t device;                // LED设备
-//     led_mode_t current_mode;            // 当前LED模式
-//     uint8_t current_brightness;         // 当前亮度
-// } led_service_send_data_t;
+// // 设置时钟时间（仅 CLOCK 模式有效）
+// void led_hal_set_clock(led_hal_device_t dev, uint8_t hour, uint8_t minute, uint8_t second);
 
-// // led服务的对外接
-// esp_err_t led_service_init(void);
-// QueueHandle_t get_led_service_queue(void);
+// // 驱动函数，需由服务层每 15~20ms 调用一次
+// void led_hal_tick(void);
+
+// #ifdef __cplusplus
+// }
+// #endif
+

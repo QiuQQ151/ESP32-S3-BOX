@@ -9,7 +9,7 @@
 #include "hal/tca9535_hal.h"
 #include "hal/lvgl_hal.h"
 #include "hal/sd_hal.h"
-#include "hal/led_hal.h"
+// #include "hal/led_hal.h"
 #include "hal/keys_hal.h"
 // 
 #include "services/system_event.h"
@@ -27,9 +27,57 @@ static void test_task(void *arg)
 {
     while(1){
         vTaskDelay(10000 / portTICK_PERIOD_MS); // 10s
-        ESP_LOGI(TAG, "test_task");
+        // led_service_receive_data_t* led_payload = (led_service_receive_data_t*)malloc(sizeof(led_service_receive_data_t));
+        // if(led_payload){
+        //     led_payload->device = LED_HAL_DEVICE_FRONT;
+        //     led_payload->mode = LED_MODE_ALERT;
+        //     led_payload->brightness = 80;
+        //     led_payload->arg = 0;
+            
+        //     // 
+        //     event_data_t* led_event = (event_data_t*)malloc(sizeof(event_data_t));
+        //     if(led_event){
+        //         led_event->service_id = HAL;
+        //         led_event->event_type = REQUEST;
+        //         led_event->data = led_payload;
+        //         led_event->data_len = sizeof(led_service_receive_data_t);
+        //         xQueueSend(get_led_service_queue(), &led_event, 0);
+        //     } else{
+        //         ESP_LOGE(TAG, "malloc led_event failed");
+        //         free(led_payload);
+        //     }
+        // }
+        // ESP_LOGI(TAG, "test_task");
+        // // 切换到呼吸模式
+        // led_hal_set_panel_mode(LED_HAL_DEVICE_FRONT, LED_MODE_BREATH, 80, 0);
+        // vTaskDelay(10000 / portTICK_PERIOD_MS); // 10s
+        // // 启动番茄时钟
+        // led_hal_set_panel_mode(LED_HAL_DEVICE_FRONT, LED_MODE_CLOCK, 80, 10);
+        // vTaskDelay(10000 / portTICK_PERIOD_MS); // 10s
+        // // 模拟音量变化
+        // int i = 50;
+        // while( i < 100){
+        //     led_hal_set_panel_mode(LED_HAL_DEVICE_FRONT, LED_MODE_VOLUME, 80, i);
+        //     i++;
+        //     vTaskDelay(100 / portTICK_PERIOD_MS); // 0.1s
+        // }
+        // // 切回音乐模式
+        // led_hal_set_panel_mode(LED_HAL_DEVICE_FRONT, LED_MODE_MUSIC, 250, 0);
+        // vTaskDelay(10000 / portTICK_PERIOD_MS); // 10s        
+        // // 触发警报
+        // led_hal_set_panel_mode(LED_HAL_DEVICE_FRONT, LED_MODE_ALERT, 80, 50);
+        // vTaskDelay(10000 / portTICK_PERIOD_MS); // 10s
+        // // 切回音乐模式
+        // led_hal_set_panel_mode(LED_HAL_DEVICE_FRONT, LED_MODE_MUSIC, 250, 0);
+        // vTaskDelay(10000 / portTICK_PERIOD_MS); // 10s
+        // led_hal_set_panel_mode(LED_HAL_DEVICE_FRONT, LED_MODE_BULB, 250, 0);
+        // vTaskDelay(10000 / portTICK_PERIOD_MS); // 10s
+        // led_hal_set_panel_mode(LED_HAL_DEVICE_FRONT, LED_MODE_RUN, 80, 0);
+        // vTaskDelay(10000 / portTICK_PERIOD_MS); // 10s
+        // led_hal_set_panel_mode(LED_HAL_DEVICE_FRONT, LED_MODE_OFF, 80, 0);
     }
 }
+
 
 void app_main(void)
 {
@@ -42,30 +90,16 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret); 
 
+    led_service_init(); // 初始化LED服务
+    vTaskDelay(1000 / portTICK_PERIOD_MS); // 1s
     wifi_service_init();
+    vTaskDelay(1000 / portTICK_PERIOD_MS); // 1s
     audio_service_init(); // 初始化了IIC（I2C_NUM_0）和IIS，并初始化了tca9535 IO扩展芯片（IIC通信）
-    sntp_service_init(); // 初始化了NTP客户端(需要WiFi连接)  存在栈溢出，待查
-    led_hal_init();
-//  led_service_init(); // 初始化LED服务
+    vTaskDelay(1000 / portTICK_PERIOD_MS); // 1s
+    sntp_service_init(); // 初始化了NTP客户端(需要WiFi连接) 
+    vTaskDelay(1000 / portTICK_PERIOD_MS); // 1s
     ui_service_init(); // 注释里面含iic初始化，里面初始化通用按键key_hal_init();
-
-//     // audio
-//     
-
-//     // ====================hal====================
-//     // IO扩展口
-//    
-//     // led
-//     led_hal_init();
-//     // sd
-//     sd_hal_init();
-   
-
-//     // ==================系统service
-//    // 事件转发
-//     event_loop_service_init();
-//     // 电源管理
-//     power_service_init();
+//  power_service_init();
 
 //     // sntp
 //     
