@@ -32,6 +32,7 @@ LV_IMG_DECLARE(icon_radio);
 LV_IMG_DECLARE(icon_weather);
 LV_IMG_DECLARE(icon_setting);
 LV_IMG_DECLARE(icon_usb);
+LV_IMG_DECLARE(icon_usb_vol);
 LV_IMG_DECLARE(icon_tomato);
 
 // 桌面项定义
@@ -51,7 +52,8 @@ static const desktop_item_t desktop_items[] = {
     { "folder_app",   &icon_folder,    "文件" },
     { "record_app",   &icon_record,    "录音机" },
     { "lght_app",     &icon_light,     "手电筒" },
-    { "usb_app",      &icon_usb,       "U盘模式" },
+    { "soundcard_app",  &icon_usb_vol,   "USB音箱" },   
+    { "usb_disk_app", &icon_usb,  "U盘模式" },
     { "setting_app",  &icon_setting,   "设置" },
 };
 static const int desktop_item_count = sizeof(desktop_items) / sizeof(desktop_items[0]);

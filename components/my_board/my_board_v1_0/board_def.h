@@ -32,7 +32,7 @@
 #define ES8311_MCLK_SOURCE        0      /* 0 From MCLK of esp32   1 From BCLK */
 
 
-#define BOARD_PA_GAIN             (6) /* Power amplifier gain defined by board (dB) */
+#define BOARD_PA_GAIN             (5) /* Power amplifier gain defined by board (dB) */
 
 #define SDCARD_PWR_CTRL             -1
 #define ESP_SD_PIN_CLK              -1
@@ -49,18 +49,46 @@
 #define ESP_SD_PIN_WP               -1
 
 extern audio_hal_func_t AUDIO_CODEC_ES8311_DEFAULT_HANDLE;
+extern audio_hal_func_t AUDIO_CODEC_ES7210_DEFAULT_HANDLE;
 
-#define AUDIO_CODEC_DEFAULT_CONFIG(){                   \
-        .adc_input  = AUDIO_HAL_ADC_INPUT_LINE1,        \
-        .dac_output = AUDIO_HAL_DAC_OUTPUT_ALL,         \
-        .codec_mode = AUDIO_HAL_CODEC_MODE_BOTH,        \
+/* ==================== ES7210 录音配置（双麦克风 TDM） ==================== */
+#define AUDIO_ADC_DUAL_MIC_CONFIG() {                   \
+        .adc_input  = AUDIO_HAL_ADC_INPUT_ALL,        \
+        .codec_mode = AUDIO_HAL_CODEC_MODE_ENCODE,    \
         .i2s_iface = {                                  \
-            .mode = AUDIO_HAL_MODE_SLAVE,               \
-            .fmt = AUDIO_HAL_I2S_NORMAL,                \
-            .samples = AUDIO_HAL_16K_SAMPLES,           \
-            .bits = AUDIO_HAL_BIT_LENGTH_16BITS,        \
+            .mode     = AUDIO_HAL_MODE_SLAVE,           \
+            .fmt      = AUDIO_HAL_I2S_DSP,              \
+            .samples  = AUDIO_HAL_48K_SAMPLES,          \
+            .bits     = AUDIO_HAL_BIT_LENGTH_16BITS,    \
         },                                              \
-};
+}
+
+/* ==================== ES8311 播放配置（标准 I2S） ==================== */
+#define AUDIO_DAC_PLAYBACK_CONFIG() {                   \
+        .dac_output = AUDIO_HAL_DAC_OUTPUT_ALL,         \
+        .codec_mode = AUDIO_HAL_CODEC_MODE_DECODE,    \
+        .i2s_iface = {                                  \
+            .mode     = AUDIO_HAL_MODE_SLAVE,           \
+            .fmt      = AUDIO_HAL_I2S_NORMAL,           \
+            .samples  = AUDIO_HAL_48K_SAMPLES,          \
+            .bits     = AUDIO_HAL_BIT_LENGTH_16BITS,    \
+        },                                              \
+}
+
+/*
+// #define AUDIO_CODEC_DEFAULT_CONFIG(){                   \
+//         .adc_input  = AUDIO_HAL_ADC_INPUT_LINE1,        \
+//         .dac_output = AUDIO_HAL_DAC_OUTPUT_ALL,         \
+//         .codec_mode = AUDIO_HAL_CODEC_MODE_BOTH,        \
+//         .i2s_iface = {                                  \
+//             .mode = AUDIO_HAL_MODE_SLAVE,               \
+//             .fmt = AUDIO_HAL_I2S_NORMAL,                \
+//             .samples = AUDIO_HAL_48K_SAMPLES,           \  
+//             .bits = AUDIO_HAL_BIT_LENGTH_16BITS,        \
+//         },                                              \
+// };
+// 16k AUDIO_HAL_I2S_NORMAL
+*/
 
 #define INPUT_KEY_NUM     1             /* You need to define the number of input buttons on your board */
 

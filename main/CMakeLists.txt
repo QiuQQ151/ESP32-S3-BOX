@@ -1,6 +1,3 @@
-# idf_component_register(SRCS "main.c"
-#                        INCLUDE_DIRS ".")
-
 set(SOURCES
     main.c
     # component
@@ -29,8 +26,9 @@ set(SOURCES
     
     # App 层
     app/desktop_app.c
-    app/radio_app.c
-    app/music_app.c
+    # app/radio_app.c
+    # app/music_app.c
+    # app/soundcard_app.c
     
 
     # 附加文件
@@ -47,6 +45,7 @@ set(SOURCES
     icon/icon_music.c
     icon/icon_record.c 
     icon/icon_usb.c    
+    icon/icon_usb_vol.c  
     icon/icon_tomato.c  
     icon/icon_next_40.c  
     icon/icon_play_40.c
@@ -55,6 +54,7 @@ set(SOURCES
     icon/icon_stop_40.c
     icon/icon_wifion_15.c
     icon/icon_wifioff_15.c
+
 )
 
 set(INCLUDE_DIRS
@@ -68,5 +68,5 @@ set(INCLUDE_DIRS
 
 idf_component_register(SRCS ${SOURCES}
                        INCLUDE_DIRS ${INCLUDE_DIRS}
-                       EMBED_FILES "canon.pcm"
+                       #EMBED_FILES "canon.pcm"
 )

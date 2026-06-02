@@ -426,12 +426,14 @@ static void radio_handle_change_to_audio(audio_service_cmd_t cmd){
         ESP_LOGE(TAG,"malloc audio_service_receive_data_t err");
     } else{
         audio_payload->cmd = cmd;
+        audio_payload->content_id = selected_station_index;
         strcpy(audio_payload->url, stations[selected_station_index].url);
         audio_payload->prv_type = http_str;
         audio_payload->midle_type = stations[selected_station_index].type;
         audio_payload->back_type = i2s_hal;
         audio_payload->volume = volume;
         audio_payload->start_after_connect = s_radio_ui.playing;
+        audio_payload->seek_position = 0;
 
         event_data_t *evt_data = malloc(sizeof(event_data_t));
         if(!evt_data){

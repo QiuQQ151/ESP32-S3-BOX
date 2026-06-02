@@ -19,6 +19,7 @@
 #include "desktop_app.h"
 #include "radio_app.h"
 #include "music_app.h"
+#include "soundcard_app.h"
 
 static const char *TAG = "ui_service";
 
@@ -69,11 +70,12 @@ esp_err_t ui_service_init(void)
 
     // 4. 注册应用
     desktop_app_register();
-    radio_app_register();
-    music_app_register();
+    // radio_app_register();
+    // music_app_register();
+    // soundcard_app_register();
 
     // 5. 创建 UI 服务任务
-    BaseType_t ret = xTaskCreate(ui_service_task, "ui_service_task", 8192, NULL, 4, NULL);
+    BaseType_t ret = xTaskCreate(ui_service_task, "ui_service_task", 20*1024, NULL, 4, NULL);
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create UI task");
         return ESP_ERR_NO_MEM;

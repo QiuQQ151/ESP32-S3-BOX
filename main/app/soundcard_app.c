@@ -1,0 +1,252 @@
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include "esp_log.h"
+#include "lvgl.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
+#include "ui_service.h"
+#include "soundcard_app.h"
+#include "system_event.h"
+#include "keys_hal.h"
+#include "sntp_service.h"
+#include "audio_service.h"
+#include "led_service.h"
+
+static const char *TAG = "soundcard_app";
+
+typedef struct {
+    lv_obj_t *time_label;
+    lv_obj_t *mode_label;
+    lv_obj_t *status_dot;
+    lv_obj_t *volume_bar;
+    lv_timer_t *update_timer;
+    bool dot_visible;
+    int volume;
+} soundcard_ui_t;
+
+static ui_app_t s_soundcard_app;
+static soundcard_ui_t s_soundcard_ui;
+static int s_volume = 60;
+
+static void soundcard_on_create(ui_app_t *app);
+static void soundcard_on_open(ui_app_t *app);
+static void soundcard_on_close(ui_app_t *app);
+static void soundcard_on_destroy(ui_app_t *app);
+static void soundcard_on_event(ui_app_t *app, event_data_t *event);
+static void soundcard_update_timer_cb(lv_timer_t *timer);
+static void soundcard_update_time(void);
+static void soundcard_handle_change_to_audio(audio_service_cmd_t cmd);
+static void soundcard_increase_volume(void);
+static void soundcard_decrease_volume(void);
+static void soundcard_app_led_control(led_mode_t mode, uint32_t arg);
+
+void soundcard_app_register(void)
+{
+    memset(&s_soundcard_app, 0, sizeof(s_soundcard_app));
+    s_soundcard_app.name = "soundcard_app";
+    s_soundcard_app.screen = NULL;
+    s_soundcard_app.on_create = soundcard_on_create;
+    s_soundcard_app.on_open = soundcard_on_open;
+    s_soundcard_app.on_close = soundcard_on_close;
+    s_soundcard_app.on_destroy = soundcard_on_destroy;
+    s_soundcard_app.on_event = soundcard_on_event;
+    ui_service_register_app(&s_soundcard_app);
+    ESP_LOGI(TAG, "Sound card app registered");
+}
+
+static void soundcard_on_create(ui_app_t *app)
+{
+    ESP_LOGI(TAG, "soundcard_on_create");
+
+    app->screen = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(app->screen, lv_color_black(), 0);
+    lv_obj_clear_flag(app->screen, LV_OBJ_FLAG_SCROLLABLE);
+
+    // 时间
+    s_soundcard_ui.time_label = lv_label_create(app->screen);
+    lv_obj_set_style_text_color(s_soundcard_ui.time_label, lv_color_white(), 0);
+    lv_obj_set_style_text_font(s_soundcard_ui.time_label, &lv_font_montserrat_20, 0);
+    lv_label_set_text(s_soundcard_ui.time_label, "--:--:--");
+    lv_obj_align(s_soundcard_ui.time_label, LV_ALIGN_TOP_MID, 0, 10);
+
+    // 模式文字
+    s_soundcard_ui.mode_label = lv_label_create(app->screen);
+    lv_obj_set_style_text_color(s_soundcard_ui.mode_label, lv_color_white(), 0);
+    lv_obj_set_style_text_font(s_soundcard_ui.mode_label, &lv_font_montserrat_14, 0);
+    lv_label_set_text(s_soundcard_ui.mode_label, "声卡工作中");
+    lv_obj_align(s_soundcard_ui.mode_label, LV_ALIGN_CENTER, -20, 0);
+
+    // 状态指示灯
+    s_soundcard_ui.status_dot = lv_obj_create(app->screen);
+    lv_obj_set_size(s_soundcard_ui.status_dot, 30, 30);
+    lv_obj_set_style_radius(s_soundcard_ui.status_dot, 15, 0);
+    lv_obj_set_style_bg_color(s_soundcard_ui.status_dot, lv_color_black(), 0);
+    lv_obj_set_style_border_width(s_soundcard_ui.status_dot, 0, 0);
+    lv_obj_align_to(s_soundcard_ui.status_dot, s_soundcard_ui.mode_label, LV_ALIGN_OUT_RIGHT_MID, 15, 0);
+    s_soundcard_ui.dot_visible = false;
+
+    // 音量进度条
+    s_soundcard_ui.volume_bar = lv_bar_create(app->screen);
+    lv_obj_set_size(s_soundcard_ui.volume_bar, 200, 15);
+    lv_obj_align(s_soundcard_ui.volume_bar, LV_ALIGN_BOTTOM_MID, 0, -20);
+    lv_bar_set_range(s_soundcard_ui.volume_bar, 0, 100);
+    lv_bar_set_value(s_soundcard_ui.volume_bar, s_volume, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(s_soundcard_ui.volume_bar, lv_color_hex(0x333333), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(s_soundcard_ui.volume_bar, lv_color_make(0, 255, 0), LV_PART_INDICATOR);
+
+    // 定时器
+    s_soundcard_ui.update_timer = lv_timer_create(soundcard_update_timer_cb, 500, NULL);
+
+    // 启动 USB 声卡
+    soundcard_handle_change_to_audio(AUDIO_CMD_CONNECT);
+    soundcard_app_led_control(LED_MODE_MUSIC, 100);
+
+    ESP_LOGI(TAG, "Sound card UI created");
+}
+
+static void soundcard_on_open(ui_app_t *app)
+{
+    ESP_LOGI(TAG, "soundcard_on_open");
+}
+
+static void soundcard_on_close(ui_app_t *app)
+{
+    ESP_LOGI(TAG, "soundcard_on_close");
+    // 不在这里断开音频，统一在 destroy 中处理
+}
+
+static void soundcard_on_destroy(ui_app_t *app)
+{
+    ESP_LOGI(TAG, "soundcard_on_destroy");
+    if (s_soundcard_ui.update_timer) {
+        lv_timer_del(s_soundcard_ui.update_timer);
+        s_soundcard_ui.update_timer = NULL;
+    }
+
+    // 断开 USB 音频（仅一次）
+    soundcard_handle_change_to_audio(AUDIO_CMD_DISCONNECT);
+
+    // 清空指针
+    s_soundcard_ui.time_label  = NULL;
+    s_soundcard_ui.mode_label  = NULL;
+    s_soundcard_ui.status_dot  = NULL;
+    s_soundcard_ui.volume_bar  = NULL;
+    app->screen = NULL;
+}
+
+static void soundcard_on_event(ui_app_t *app, event_data_t *event)
+{
+    if (!event) return;
+
+    if (event->event_type == NOTIFICATION) {
+        if (event->service_id == KEYHAL_SERVICE) {
+            key_event_data_t *key_data = (key_event_data_t *)event->data;
+            if (key_data) {
+                if (key_data->event == KEY_EVENT_PRESS) {
+                    if (key_data->key_id == KEY_ID_BACK) {
+                        ui_service_receive_data_t *cmd = malloc(sizeof(ui_service_receive_data_t));
+                        if (cmd) {
+                            cmd->cmd = UI_CMD_GO_HOME;
+                            cmd->data = NULL;
+                            cmd->data_len = 0;
+                            event_data_t *evt = malloc(sizeof(event_data_t));
+                            if (evt) {
+                                evt->service_id = UI_SERVICE;
+                                evt->event_type = REQUEST;
+                                evt->reply_queue = NULL;
+                                evt->data = cmd;
+                                evt->data_len = sizeof(ui_service_receive_data_t);
+                                xQueueSend(get_ui_service_queue(), &evt, 0);
+                                ESP_LOGI(TAG, "send go home event");
+                            } else {
+                                free(cmd);
+                            }
+                        }
+                    }
+                } else if (key_data->event == KEY_EVENT_ROTATE_CW) {
+                    soundcard_increase_volume();
+                } else if (key_data->event == KEY_EVENT_ROTATE_CCW) {
+                    soundcard_decrease_volume();
+                }
+            }
+        }
+    }
+
+    if (event->data) free(event->data);
+    free(event);
+}
+
+static void soundcard_update_timer_cb(lv_timer_t *timer)
+{
+    soundcard_update_time();
+
+    s_soundcard_ui.dot_visible = !s_soundcard_ui.dot_visible;
+    lv_color_t color = s_soundcard_ui.dot_visible ? lv_color_make(0, 255, 0) : lv_color_black();
+    lv_obj_set_style_bg_color(s_soundcard_ui.status_dot, color, 0);
+}
+
+static void soundcard_update_time(void)
+{
+    // 预留 SNTP 时间更新
+    lv_label_set_text(s_soundcard_ui.time_label, "12:34:56");
+}
+
+static void soundcard_handle_change_to_audio(audio_service_cmd_t cmd)
+{
+    audio_service_receive_data_t *payload = malloc(sizeof(audio_service_receive_data_t));
+    if (!payload) return;
+
+    memset(payload, 0, sizeof(audio_service_receive_data_t));
+    payload->cmd = cmd;
+
+    if (cmd == AUDIO_CMD_CONNECT) {
+        payload->prv_type = usb_uac_str;
+        payload->volume = s_volume;
+        payload->start_after_connect = true;
+        payload->content_id = CONTENT_ID_ALWAYS_NEW;
+    }
+
+    event_data_t *evt = malloc(sizeof(event_data_t));
+    if (!evt) { free(payload); return; }
+
+    evt->service_id = AUDIO_SERVICE;
+    evt->event_type = REQUEST;
+    evt->reply_queue = NULL;
+    evt->data = payload;
+    evt->data_len = sizeof(audio_service_receive_data_t);
+
+    xQueueSend(get_audio_service_queue(), &evt, 0);
+}
+
+static void soundcard_increase_volume(void)
+{
+    if (s_volume >= 100) return;
+    s_volume += 5;
+    if (s_volume > 100) s_volume = 100;
+
+    set_volume(s_volume);
+    if (s_soundcard_ui.volume_bar) {
+        lv_bar_set_value(s_soundcard_ui.volume_bar, s_volume, LV_ANIM_ON);
+    }
+    ESP_LOGI(TAG, "Volume increased to %d", s_volume);
+}
+
+static void soundcard_decrease_volume(void)
+{
+    if (s_volume <= 0) return;
+    s_volume -= 5;
+    if (s_volume < 0) s_volume = 0;
+
+    set_volume(s_volume);
+    if (s_soundcard_ui.volume_bar) {
+        lv_bar_set_value(s_soundcard_ui.volume_bar, s_volume, LV_ANIM_ON);
+    }
+    ESP_LOGI(TAG, "Volume decreased to %d", s_volume);
+}
+
+static void soundcard_app_led_control(led_mode_t mode, uint32_t arg)
+{
+    ESP_LOGI(TAG, "LED control: mode=%d, arg=%" PRIu32, mode, arg);
+}

@@ -35,7 +35,7 @@ esp_err_t power_service_init(void)
     // 向事件循环注册
     power_service_ID = event_loop_register_service("power_service_task", power_service_request_queue);
     // 启动服务任务
-    xTaskCreate(power_service_task, "power_service_task", 2048, NULL, 5, NULL);  // 对外服务
+    xTaskCreate(power_service_task, "power_service_task", 2048, NULL, 4, NULL);  // 对外服务
     ESP_LOGI(TAG, "Initialized");
     return ESP_OK;
 }

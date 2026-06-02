@@ -55,7 +55,7 @@ esp_err_t wifi_service_init(void)
         return ESP_ERR_NO_MEM;
     }
     // 5. 启动服务任务
-    xTaskCreate(wifi_service_task, "wifi_service_task", 3584, NULL, 5, &wifi_service_task_handle);
+    xTaskCreate(wifi_service_task, "wifi_service_task", 3584, NULL, 4, &wifi_service_task_handle);
     ESP_LOGI(TAG, "Initialized");
     return ESP_OK;
 }

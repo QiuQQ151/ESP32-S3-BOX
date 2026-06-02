@@ -19,6 +19,7 @@
 #include "board.h"
 #include "audio_mem.h"
 #include "es8311.h"
+#include "es7210.h"
 #include "periph_button.h"
 
 static const char *TAG = "AUDIO_BOARD";
@@ -38,10 +39,46 @@ audio_board_handle_t audio_board_init(void)
     return board_handle;
 }
 
+esp_err_t test_es7210(void)
+{
+    uint8_t reg_addr = 0x00;  // ES7210 RESET 寄存器
+    uint8_t data;
+    
+    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (0x41 << 1) | I2C_MASTER_WRITE, true);
+    i2c_master_write_byte(cmd, reg_addr, true);
+    i2c_master_start(cmd);  // 重复起始
+    i2c_master_write_byte(cmd, (0x41 << 1) | I2C_MASTER_READ, true);
+    i2c_master_read_byte(cmd, &data, I2C_MASTER_LAST_NACK);
+    i2c_master_stop(cmd);
+    
+    esp_err_t ret = i2c_master_cmd_begin(I2C_NUM_0, cmd, 1000 / portTICK_PERIOD_MS);
+    i2c_cmd_link_delete(cmd);
+    
+    if (ret == ESP_OK) {
+        printf("ES7210 REG[0x00] = 0x%02X\n", data);
+        return ESP_OK;
+    } else {
+        printf("Failed to read ES7210: %s\n", esp_err_to_name(ret));
+        return ESP_FAIL;
+    }
+}
+
 audio_hal_handle_t audio_board_codec_init(void)
 {
-    audio_hal_codec_config_t audio_codec_cfg = AUDIO_CODEC_DEFAULT_CONFIG();
+    // ES7210
+    audio_hal_codec_config_t es7210_cfg =AUDIO_ADC_DUAL_MIC_CONFIG();
+    audio_hal_handle_t es7210_hal = audio_hal_init(&es7210_cfg, &AUDIO_CODEC_ES7210_DEFAULT_HANDLE); 
+    audio_hal_ctrl_codec(es7210_hal, AUDIO_HAL_CODEC_MODE_ENCODE, AUDIO_HAL_CTRL_START);
+    es7210_adc_set_gain(ES7210_INPUT_MIC1 | ES7210_INPUT_MIC2, GAIN_30DB); // 设置增益为 12dB
+
+    // es8311
+    audio_hal_codec_config_t audio_codec_cfg = AUDIO_DAC_PLAYBACK_CONFIG();
     audio_hal_handle_t codec_hal = audio_hal_init(&audio_codec_cfg, &AUDIO_CODEC_ES8311_DEFAULT_HANDLE);
+
+
+
     AUDIO_NULL_CHECK(TAG, codec_hal, return NULL);
     return codec_hal;
 }

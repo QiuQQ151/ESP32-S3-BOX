@@ -31,6 +31,8 @@
 #include "soc/soc_caps.h"
 
 static const char *TAG = "MY_BOARD_V1_0";
+// 添加静态变量跟踪 I2C 初始化状态
+static bool i2c_initialized = false;
 
 esp_err_t get_i2c_pins(i2c_port_t port, i2c_config_t *i2c_config)
 {
