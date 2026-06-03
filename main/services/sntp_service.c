@@ -57,7 +57,7 @@ void time_sync_notification_cb(struct timeval *tv)
 
 static void sntp_service_check_wifi_task(void *arg){    
     while (sntp_service_state == SNTP_SERVICE_ERR_WIFI) {
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        vTaskDelay(10000 / portTICK_PERIOD_MS); //10s
         // 等待WiFi连接
         // 请求一次WiFi连接状态
         wifi_service_receive_data_t *wifi_payload = (wifi_service_receive_data_t*)malloc(sizeof(wifi_service_receive_data_t));

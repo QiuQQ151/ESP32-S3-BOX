@@ -84,7 +84,7 @@ void app_main(void)
     led_service_init();
     wifi_service_init();
     audio_service_init();
-    //sntp_service_init();
+    sntp_service_init();
     ui_service_init();
  
     

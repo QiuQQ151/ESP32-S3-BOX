@@ -301,6 +301,7 @@ static audio_element_handle_t create_element_by_role(audio_service_stream_type_t
                 http_cfg.out_rb_size = 10 * 1024;
                 http_cfg.task_stack = 10 * 1024;
                 http_cfg.request_size = 15 * 1024;
+                http_cfg.stack_in_ext = true;
                 audio_element_handle_t el = http_stream_init(&http_cfg);
                 if (el) audio_element_set_uri(el, el_url);
                 return el;
@@ -308,7 +309,8 @@ static audio_element_handle_t create_element_by_role(audio_service_stream_type_t
             case file_str: {
                 fatfs_stream_cfg_t fatfs_cfg = FATFS_STREAM_CFG_DEFAULT();
                 fatfs_cfg.type = (is_output == true) ? AUDIO_STREAM_READER : AUDIO_STREAM_WRITER;
-                fatfs_cfg.buf_sz = 100 * 1024;
+                fatfs_cfg.buf_sz = 30 * 1024;
+                fatfs_cfg.ext_stack = true;
                 audio_element_handle_t el = fatfs_stream_init(&fatfs_cfg);
                 if (el) audio_element_set_uri(el, el_url);
                 return el;
@@ -330,7 +332,7 @@ static audio_element_handle_t create_element_by_role(audio_service_stream_type_t
                 i2s_cfg.type = (is_output == true) ? AUDIO_STREAM_WRITER : AUDIO_STREAM_READER; // 播放到喇叭往i2s写，录音从i2s读
                 if(is_output){
                     i2s_cfg.chan_cfg.dma_desc_num = 8; 
-                    i2s_cfg.chan_cfg.dma_frame_num = 512; 
+                    i2s_cfg.chan_cfg.dma_frame_num = 256; 
                     i2s_cfg.task_stack = 4*1024; //
                     i2s_cfg.buffer_len = 12*100; //
                     i2s_cfg.stack_in_ext = true; // 允许任务栈在 PSRAM（如果需要更大的栈）  
@@ -465,9 +467,9 @@ static void handle_play(QueueHandle_t reply_queue)
             if (g_uac_active) {
                 audio_pipeline_resume(pipeline_out);
             } else {
-                if (el_out_back) audio_element_resume(el_out_back, 0, portMAX_DELAY);
+                if (el_out_back) audio_element_resume(el_out_back, 0, portMAX_DELAY);  
                 if (el_out_mid)  audio_element_resume(el_out_mid, 0, portMAX_DELAY);
-                if (el_out_prev) audio_element_resume(el_out_prev, 0, portMAX_DELAY);
+                if (el_out_prev) audio_element_resume(el_out_prev, 0, portMAX_DELAY);        
                 audio_pipeline_change_state(pipeline_out, AEL_STATE_RUNNING);
             }
             audio_out_state = AUDIO_SERVICE_PLAYING;

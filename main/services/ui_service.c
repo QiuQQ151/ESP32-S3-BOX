@@ -71,7 +71,7 @@ esp_err_t ui_service_init(void)
     // 4. 注册应用
     desktop_app_register();
     // radio_app_register();
-    // music_app_register();
+    music_app_register();
     soundcard_app_register();
 
     // 5. 创建 UI 服务任务
@@ -260,18 +260,18 @@ static void ui_service_process_request(event_data_t *evt)
 
     if (handled) {
         // 服务已处理，释放 payload 及外壳
-        free(payload->data);
-        free(payload);
-        free(evt);
+        if(payload->data) free(payload->data);
+        if(payload) free(payload);
+        if(evt) free(evt);
     } else {
         // 转发给当前应用，所有权转移
         if (current_app && current_app->on_event) {
             current_app->on_event(current_app, evt);
         } else {
             // 无应用接收，释放资源
-            free(payload->data);
-            free(payload);
-            free(evt);
+            if(payload->data) free(payload->data);
+            if(payload) free(payload);
+            if(evt) free(evt);
         }
     }
 }
