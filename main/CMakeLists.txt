@@ -28,7 +28,7 @@ set(SOURCES
     app/desktop_app.c
     # app/radio_app.c
     # app/music_app.c
-    # app/soundcard_app.c
+    app/soundcard_app.c
     
 
     # 附加文件

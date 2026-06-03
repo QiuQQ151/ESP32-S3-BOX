@@ -45,13 +45,16 @@ static audio_element_handle_t   el_in_back = NULL;
 static QueueHandle_t request_queue = NULL;
 static QueueHandle_t s_notify_queue = NULL;
 
-static audio_service_state_t g_state = AUDIO_SERVICE_IDLE;
-static char   g_url[200] = {0};  // 文件url
+static audio_service_state_t audio_out_state = AUDIO_SERVICE_IDLE;
+static audio_service_state_t audio_in_state = AUDIO_SERVICE_IDLE;
+static char   el_url[200] = {0};  // 文件url
 static audio_element_info_t info = {0}; // 当前播放/录音的音频格式信息
-static int    g_volume = 50;
+static int    audio_volume = 50;
 static bool   g_uac_active = false;
+static bool   audio_out_active = false;
+static bool   audio_in_active = false;
 
-// ─── 内部函数声明 ─────────────────────────────
+// ─── 内部函数声明 ─────
 static void audio_service_task(void *arg);
 #define dre_input 1
 #define dre_output 0
@@ -96,7 +99,6 @@ esp_err_t audio_service_init(void)
 
     xTaskCreate(audio_service_task, "audio_srv", 16 * 1024, NULL, 6, NULL);
 
-
     return ESP_OK;
 }
 
@@ -110,13 +112,13 @@ esp_err_t set_audio_volume(int volume)
     if (volume < 0) volume = 0;
     if (volume > 100) volume = 100;
     audio_hal_set_volume(board_handle->audio_hal, volume);
-    g_volume = volume;
+    audio_volume = volume;
     return ESP_OK;
 }
 
 int get_audio_volume(void)
 {
-    return g_volume;
+    return audio_volume;
 }
 
 // ─── 服务主循环 ────────────────────────────────
@@ -144,7 +146,7 @@ static void audio_service_task(void *arg)
                         ESP_LOGI(TAG, "CMD_DISCONNECT");
                         destroy_pipeline(dre_output);
                         destroy_pipeline(dre_input);
-                        g_state = AUDIO_SERVICE_IDLE;
+                        audio_out_state = AUDIO_SERVICE_IDLE;
                         send_reply(AUDIO_CMD_DISCONNECT, reply);
                         break;
                     case AUDIO_CMD_PLAY:
@@ -177,6 +179,7 @@ static void audio_service_task(void *arg)
 // ─── 销毁所有管线 ─────────────────────────────
 static void destroy_pipeline(int direction)
 {
+    g_uac_active = false; // 必须在销毁管道前关闭 UAC 活动标志，以避免回调访问已销毁的元素引发错误
     if(direction == dre_output){
         if (pipeline_out) {
             audio_pipeline_stop(pipeline_out);
@@ -184,33 +187,35 @@ static void destroy_pipeline(int direction)
             audio_pipeline_terminate(pipeline_out);
             audio_pipeline_deinit(pipeline_out);
             pipeline_out = NULL;
+            ESP_LOGI(TAG, "Output pipeline destroyed");            
         }
         el_out_prev = NULL;
         el_out_mid  = NULL;
         el_out_back = NULL;
-        ESP_LOGI(TAG, "Output pipeline destroyed");
+        audio_out_active = false;
     }
 
     if(direction == dre_input){
-        if (pipeline_in) {
+        if ( pipeline_in ) {
             audio_pipeline_stop(pipeline_in);
             audio_pipeline_wait_for_stop(pipeline_in);
             audio_pipeline_terminate(pipeline_in);
             audio_pipeline_deinit(pipeline_in);
             pipeline_in = NULL;
+            ESP_LOGI(TAG, "Input pipeline destroyed");            
         }
         el_in_prev = NULL;
         el_in_mid  = NULL;
         el_in_back = NULL;
-        ESP_LOGI(TAG, "Input pipeline destroyed");
+        audio_in_active = false;
    }
-   //g_uac_active = false;
+   
 }
 
-// ─── 连接处理（精简后） ──────────────────────
+// ─── 连接处理 ──────────────────────
 static void handle_connect(audio_service_receive_data_t *req, QueueHandle_t reply_queue)
 {
-    strncpy(g_url, req->url, sizeof(g_url) - 1);
+    strncpy(el_url, req->url, sizeof(el_url) - 1);
     set_audio_volume(req->volume);
 
     esp_err_t ret = build_pipeline(req->prv_type, req->midle_type, req->back_type);
@@ -220,23 +225,31 @@ static void handle_connect(audio_service_receive_data_t *req, QueueHandle_t repl
     }
 
     // 根据实际创建的管线决定后续操作
-    if (pipeline_out) {
-        // 播放管线
+    if (pipeline_out && audio_out_active == false ) {
+        // 先确定 UAC 标志（无论是否自动启动）
         g_uac_active = (req->prv_type == usb_uac);
         if (req->start_after_connect) {
             audio_pipeline_run(pipeline_out);
-            g_state = AUDIO_SERVICE_PLAYING;
+            audio_out_state = AUDIO_SERVICE_PLAYING;
+            audio_out_active = true;
         } else {
-            g_state = AUDIO_SERVICE_CONNECTED;
+            audio_out_state = AUDIO_SERVICE_CONNECTED;
+            audio_out_active = false;
         }
-        ESP_LOGI(TAG, "Output pipeline %s", req->start_after_connect ? "playing" : "connected");
     }
-    if (pipeline_in) {
+    if (pipeline_in && audio_in_active == false) { 
         // 录音管线
-        g_uac_active = (req->back_type == usb_uac);
-        audio_pipeline_run(pipeline_in);
-        g_state = AUDIO_SERVICE_PLAYING;   // 录音状态也用 PLAYING 表示
-        ESP_LOGI(TAG, "Input pipeline recording");
+        if (req->back_type == usb_uac) {
+            g_uac_active = true;            // 输入管线也可能涉及 UAC
+        }
+        if (req->start_after_connect) {
+            audio_pipeline_run(pipeline_in);
+            audio_in_state = AUDIO_SERVICE_PLAYING;   // 录音状态也用 PLAYING 表示
+            audio_in_active = true;
+        } else {
+            audio_in_state = AUDIO_SERVICE_CONNECTED;
+            audio_in_active = false;
+        }
     }
 
     send_reply(AUDIO_CMD_CONNECT, reply_queue);
@@ -245,7 +258,8 @@ static void handle_connect(audio_service_receive_data_t *req, QueueHandle_t repl
 connect_fail:
     destroy_pipeline(dre_output);
     destroy_pipeline(dre_input);
-    g_state = AUDIO_SERVICE_ERROR;
+    audio_out_state = AUDIO_SERVICE_ERROR;
+    audio_in_state = AUDIO_SERVICE_ERROR;
     send_notification(AUDIO_CMD_ERROR);
     if (reply_queue) send_reply(AUDIO_CMD_ERROR, reply_queue);
 }
@@ -288,7 +302,7 @@ static audio_element_handle_t create_element_by_role(audio_service_stream_type_t
                 http_cfg.task_stack = 10 * 1024;
                 http_cfg.request_size = 15 * 1024;
                 audio_element_handle_t el = http_stream_init(&http_cfg);
-                if (el) audio_element_set_uri(el, g_url);
+                if (el) audio_element_set_uri(el, el_url);
                 return el;
             }
             case file_str: {
@@ -296,7 +310,7 @@ static audio_element_handle_t create_element_by_role(audio_service_stream_type_t
                 fatfs_cfg.type = (is_output == true) ? AUDIO_STREAM_READER : AUDIO_STREAM_WRITER;
                 fatfs_cfg.buf_sz = 100 * 1024;
                 audio_element_handle_t el = fatfs_stream_init(&fatfs_cfg);
-                if (el) audio_element_set_uri(el, g_url);
+                if (el) audio_element_set_uri(el, el_url);
                 return el;
             }
             // 缓冲区
@@ -383,7 +397,12 @@ static esp_err_t build_pipeline(audio_service_stream_type_t prv_type,
     // 6. 创建 pipeline 容器
     audio_pipeline_cfg_t pipe_cfg = DEFAULT_AUDIO_PIPELINE_CONFIG();
     pipeline = audio_pipeline_init(&pipe_cfg);
+    if( pipeline == NULL){
+        ESP_LOGE(TAG, "Failed to create pipeline");
+        goto fail;
+    } else {
     ESP_LOGI(TAG, "Pipeline created: %p", pipeline);
+    }
 
     // 7. 注册元素并连接（根据实际创建的元素数量灵活连接）
     if( el_prev ) audio_pipeline_register(pipeline, el_prev, "tag_prev");
@@ -420,28 +439,28 @@ static esp_err_t build_pipeline(audio_service_stream_type_t prv_type,
     ESP_LOGI(TAG, "%s pipeline assembled", is_output ? "Output" : "Input");
     return ESP_OK;
 
-// fail:
-//     if (el_prev) audio_element_deinit(el_prev);
-//     if (el_mid)  audio_element_deinit(el_mid);
-//     if (el_back) audio_element_deinit(el_back);
-//     if (is_output) {
-//         el_out_prev = NULL; el_out_mid = NULL; el_out_back = NULL;
-//     } else {
-//         el_in_prev = NULL; el_in_mid = NULL; el_in_back = NULL;
-//     }
-//     return ESP_FAIL;
+fail:
+    if (el_prev) audio_element_deinit(el_prev);
+    if (el_mid)  audio_element_deinit(el_mid);
+    if (el_back) audio_element_deinit(el_back);
+    if (is_output) {
+        el_out_prev = NULL; el_out_mid = NULL; el_out_back = NULL;
+    } else {
+        el_in_prev = NULL; el_in_mid = NULL; el_in_back = NULL;
+    }
+    return ESP_FAIL;
 }
 
 
-// ─── 播放 / 暂停（不变，内部使用 el_out_* 系列） ──
+// ─── 播放 / 暂停 ──
 static void handle_play(QueueHandle_t reply_queue)
 {
-    if (g_state == AUDIO_SERVICE_PLAYING) {
+    if (audio_out_state == AUDIO_SERVICE_PLAYING) {
         ESP_LOGI(TAG, "Already playing");
         send_reply(AUDIO_CMD_PLAY, reply_queue);
         return;
     }
-    if (g_state == AUDIO_SERVICE_PAUSED) {
+    if (audio_out_state == AUDIO_SERVICE_PAUSED) {
         if (pipeline_out) {
             if (g_uac_active) {
                 audio_pipeline_resume(pipeline_out);
@@ -451,28 +470,30 @@ static void handle_play(QueueHandle_t reply_queue)
                 if (el_out_prev) audio_element_resume(el_out_prev, 0, portMAX_DELAY);
                 audio_pipeline_change_state(pipeline_out, AEL_STATE_RUNNING);
             }
-            g_state = AUDIO_SERVICE_PLAYING;
+            audio_out_state = AUDIO_SERVICE_PLAYING;
+            // audio_out_active 在暂停时本就为 true，此处不变
             ESP_LOGI(TAG, "Resumed");
             send_reply(AUDIO_CMD_PLAY, reply_queue);
             return;
         }
     }
-    if (g_state == AUDIO_SERVICE_CONNECTED && pipeline_out) {
+    if (audio_out_state == AUDIO_SERVICE_CONNECTED && pipeline_out) {
         audio_pipeline_run(pipeline_out);
-        g_state = AUDIO_SERVICE_PLAYING;
+        audio_out_state = AUDIO_SERVICE_PLAYING;
+        audio_out_active = true;          // ★ 补充：从连接状态启动后应置为活跃
         ESP_LOGI(TAG, "Started playing");
         send_reply(AUDIO_CMD_PLAY, reply_queue);
         return;
     }
-    ESP_LOGW(TAG, "Cannot play, state=%d", g_state);
-    g_state = AUDIO_SERVICE_ERROR;
+    ESP_LOGW(TAG, "Cannot play, state=%d", audio_out_state);
+    audio_out_state = AUDIO_SERVICE_ERROR;
     send_notification(AUDIO_CMD_ERROR);
 }
 
 static void handle_pause(QueueHandle_t reply_queue)
 {
-    if (g_state != AUDIO_SERVICE_PLAYING) {
-        ESP_LOGW(TAG, "Cannot pause, state=%d", g_state);
+    if (audio_out_state != AUDIO_SERVICE_PLAYING) {
+        ESP_LOGW(TAG, "Cannot pause, state=%d", audio_out_state);
         return;
     }
     if (pipeline_out) {
@@ -484,7 +505,8 @@ static void handle_pause(QueueHandle_t reply_queue)
             if (el_out_back) audio_element_pause(el_out_back);
             audio_pipeline_change_state(pipeline_out, AEL_STATE_PAUSED);
         }
-        g_state = AUDIO_SERVICE_PAUSED;
+        audio_out_state = AUDIO_SERVICE_PAUSED;
+        // audio_out_active 暂停时仍为 true
         ESP_LOGI(TAG, "Paused");
         send_reply(AUDIO_CMD_PAUSE, reply_queue);
     }
@@ -494,14 +516,15 @@ static void handle_pause(QueueHandle_t reply_queue)
 static void check_playback_end(void)
 {
     if (g_uac_active) return;
-    if (g_state != AUDIO_SERVICE_PLAYING && g_state != AUDIO_SERVICE_PAUSED) return;
+    if (audio_out_state != AUDIO_SERVICE_PLAYING && audio_out_state != AUDIO_SERVICE_PAUSED) return;
     if (!el_out_mid) return;   // 无解码器不检测
 
     audio_element_state_t st = audio_element_get_state(el_out_mid);
     if (st == AEL_STATE_FINISHED || st == AEL_STATE_STOPPED) {
         ESP_LOGI(TAG, "Playback finished");
         destroy_pipeline(dre_output);
-        g_state = AUDIO_SERVICE_IDLE;
+        audio_out_state = AUDIO_SERVICE_IDLE;
+        // audio_out_active 由 destroy_pipeline 设为 false
         send_notification(AUDIO_CMD_END);
     }
 }
@@ -514,9 +537,9 @@ static void send_reply(audio_service_cmd_t cmd, QueueHandle_t target)
     audio_service_send_data_t *data = calloc(1, sizeof(audio_service_send_data_t));
     if (!data) return;
     data->cmd = cmd;
-    data->service_state = g_state;
-    strncpy(data->url, g_url, sizeof(data->url) - 1);
-    data->volume = g_volume;
+    data->service_state = audio_out_state;
+    strncpy(data->url, el_url, sizeof(data->url) - 1);
+    data->volume = audio_volume;
 
     event_data_t *evt = malloc(sizeof(event_data_t));
     if (!evt) { free(data); return; }
@@ -538,10 +561,10 @@ static void send_notification(audio_service_cmd_t cmd)
     send_reply(cmd, s_notify_queue);
 }
 
-// ─── USB UAC 回调（不变） ────────────────────
+// ─── USB UAC 回调────────────────────
 static esp_err_t uac_output_cb(uint8_t *data, size_t len, void *arg)
 {
-    if (el_out_mid) {
+    if (el_out_mid && g_uac_active ) {
         raw_stream_write(el_out_mid, (char *)data, len);
         return ESP_OK;
     }
@@ -550,7 +573,7 @@ static esp_err_t uac_output_cb(uint8_t *data, size_t len, void *arg)
 
 static esp_err_t uac_input_cb(uint8_t *data, size_t len, size_t *bytes_read, void *arg)
 {
-    if (el_in_mid) {
+    if (el_in_mid && g_uac_active) {
         int ret = raw_stream_read(el_in_mid, (char *)data, len);
         if (ret > 0) {
             *bytes_read = ret;

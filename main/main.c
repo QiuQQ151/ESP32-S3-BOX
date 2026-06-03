@@ -148,35 +148,35 @@ void app_main(void)
     // };
     // ret = uac_device_init(&uac_cfg);
     
-    // 播放uac
-    audio_service_receive_data_t *audio_payload = malloc(sizeof(audio_service_receive_data_t));
-    audio_payload->cmd                  = AUDIO_CMD_CONNECT;
-    audio_payload->prv_type             = usb_uac;                // 指定 USB 类型
-    audio_payload->midle_type           = raw_hal;
-    audio_payload->back_type            = i2s_hal;
-    audio_payload->volume               = 70;
-    audio_payload->start_after_connect  = true;                       // 立即开始
-    event_data_t *audio_evt = malloc(sizeof(event_data_t));
-    audio_evt->service_id  = HAL;
-    audio_evt->event_type  = REQUEST;
-    audio_evt->reply_queue = NULL;   // 接收状态通知
-    audio_evt->data        = audio_payload;
-    xQueueSend(get_audio_service_queue(), &audio_evt, 0);
+    // // 播放uac
+    // audio_service_receive_data_t *audio_payload = malloc(sizeof(audio_service_receive_data_t));
+    // audio_payload->cmd                  = AUDIO_CMD_CONNECT;
+    // audio_payload->prv_type             = usb_uac;                // 指定 USB 类型
+    // audio_payload->midle_type           = raw_hal;
+    // audio_payload->back_type            = i2s_hal;
+    // audio_payload->volume               = 70;
+    // audio_payload->start_after_connect  = true;                       // 立即开始
+    // event_data_t *audio_evt = malloc(sizeof(event_data_t));
+    // audio_evt->service_id  = HAL;
+    // audio_evt->event_type  = REQUEST;
+    // audio_evt->reply_queue = NULL;   // 接收状态通知
+    // audio_evt->data        = audio_payload;
+    // xQueueSend(get_audio_service_queue(), &audio_evt, 0);
 
-    // 录音uac
-    audio_payload = malloc(sizeof(audio_service_receive_data_t));
-    audio_payload->cmd                  = AUDIO_CMD_CONNECT;
-    audio_payload->prv_type             = i2s_hal;                // 指定 USB 类型
-    audio_payload->midle_type           = raw_hal;
-    audio_payload->back_type            = usb_uac;
-    audio_payload->volume               = 70;
-    audio_payload->start_after_connect  = true;                       // 立即开始
-    audio_evt = malloc(sizeof(event_data_t));
-    audio_evt->service_id  = HAL;
-    audio_evt->event_type  = REQUEST;
-    audio_evt->reply_queue = NULL;   // 接收状态通知
-    audio_evt->data        = audio_payload;
-    xQueueSend(get_audio_service_queue(), &audio_evt, 0);
+    // // 录音uac
+    // audio_payload = malloc(sizeof(audio_service_receive_data_t));
+    // audio_payload->cmd                  = AUDIO_CMD_CONNECT;
+    // audio_payload->prv_type             = i2s_hal;                // 指定 USB 类型
+    // audio_payload->midle_type           = raw_hal;
+    // audio_payload->back_type            = usb_uac;
+    // audio_payload->volume               = 70;
+    // audio_payload->start_after_connect  = true;                       // 立即开始
+    // audio_evt = malloc(sizeof(event_data_t));
+    // audio_evt->service_id  = HAL;
+    // audio_evt->event_type  = REQUEST;
+    // audio_evt->reply_queue = NULL;   // 接收状态通知
+    // audio_evt->data        = audio_payload;
+    // xQueueSend(get_audio_service_queue(), &audio_evt, 0);
 
 
     // // 发送 WiFi 连接请求（按需修改 SSID/密码）

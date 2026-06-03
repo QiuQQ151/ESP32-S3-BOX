@@ -114,32 +114,33 @@ static void soundcard_on_open(ui_app_t *app)
 static void soundcard_on_close(ui_app_t *app)
 {
     ESP_LOGI(TAG, "soundcard_on_close");
-    // 不在这里断开音频，统一在 destroy 中处理
 }
 
 static void soundcard_on_destroy(ui_app_t *app)
 {
     ESP_LOGI(TAG, "soundcard_on_destroy");
+    // 断开 USB 音频
+    soundcard_handle_change_to_audio(AUDIO_CMD_DISCONNECT);
+    ESP_LOGI(TAG, "Sound card disconnected");
+
     if (s_soundcard_ui.update_timer) {
         lv_timer_del(s_soundcard_ui.update_timer);
         s_soundcard_ui.update_timer = NULL;
     }
-
-    // 断开 USB 音频（仅一次）
-    soundcard_handle_change_to_audio(AUDIO_CMD_DISCONNECT);
-
     // 清空指针
     s_soundcard_ui.time_label  = NULL;
     s_soundcard_ui.mode_label  = NULL;
     s_soundcard_ui.status_dot  = NULL;
     s_soundcard_ui.volume_bar  = NULL;
     app->screen = NULL;
+    ESP_LOGI(TAG, "Sound card UI destroyed");
 }
 
 static void soundcard_on_event(ui_app_t *app, event_data_t *event)
 {
     if (!event) return;
 
+    // 处理按键事件
     if (event->event_type == NOTIFICATION) {
         if (event->service_id == KEYHAL_SERVICE) {
             key_event_data_t *key_data = (key_event_data_t *)event->data;
@@ -172,6 +173,27 @@ static void soundcard_on_event(ui_app_t *app, event_data_t *event)
                 }
             }
         }
+
+        // 处理音频服务通知
+        if (event->service_id == AUDIO_SERVICE) {
+            audio_service_send_data_t *audio_ntf = (audio_service_send_data_t *)event->data;
+            if (audio_ntf) {
+                switch (audio_ntf->cmd) {
+                case AUDIO_CMD_END:
+                    ESP_LOGI(TAG, "Audio playback ended");
+                    // 可恢复指示灯为熄灭状态
+                    break;
+                case AUDIO_CMD_ERROR:
+                    ESP_LOGE(TAG, "Audio error occurred");
+                    break;
+                case AUDIO_CMD_CONNECT:
+                    ESP_LOGI(TAG, "Audio connected");
+                    break;
+                default:
+                    break;
+                }
+            }
+        }
     }
 
     if (event->data) free(event->data);
@@ -194,30 +216,57 @@ static void soundcard_update_time(void)
 }
 
 static void soundcard_handle_change_to_audio(audio_service_cmd_t cmd)
-{
+{   
+    // uac播放
     audio_service_receive_data_t *payload = malloc(sizeof(audio_service_receive_data_t));
     if (!payload) return;
-
     memset(payload, 0, sizeof(audio_service_receive_data_t));
     payload->cmd = cmd;
-
     if (cmd == AUDIO_CMD_CONNECT) {
-        payload->prv_type = usb_uac_str;
+        // 声卡管线：USB UAC 输入 → 无解码 → I2S 输出
+        payload->prv_type = usb_uac;          // 音频来源：USB 主机
+        payload->midle_type = raw_hal; // 无需解码
+        payload->back_type = i2s_hal;          // 输出到板载扬声器
         payload->volume = s_volume;
         payload->start_after_connect = true;
-        payload->content_id = CONTENT_ID_ALWAYS_NEW;
     }
-
     event_data_t *evt = malloc(sizeof(event_data_t));
-    if (!evt) { free(payload); return; }
-
-    evt->service_id = AUDIO_SERVICE;
+    if (!evt) {
+        free(payload);
+        return;
+    }
+    evt->service_id = UI_SERVICE;
     evt->event_type = REQUEST;
-    evt->reply_queue = NULL;
+    evt->reply_queue = NULL;   // 本应用无需同步回复
     evt->data = payload;
     evt->data_len = sizeof(audio_service_receive_data_t);
-
     xQueueSend(get_audio_service_queue(), &evt, 0);
+    ESP_LOGI(TAG, "Sent audio service request: cmd=%d", cmd);
+
+    // uac录音
+    payload = malloc(sizeof(audio_service_receive_data_t));
+    if (!payload) return;
+    memset(payload, 0, sizeof(audio_service_receive_data_t));
+    payload->cmd = cmd;
+    if (cmd == AUDIO_CMD_CONNECT) {
+        payload->prv_type = i2s_hal;          // 
+        payload->midle_type = raw_hal; // 无需解码
+        payload->back_type = usb_uac;          // 
+        payload->volume = s_volume;
+        payload->start_after_connect = true;
+    }
+    evt = malloc(sizeof(event_data_t));
+    if (!evt) {
+        free(payload);
+        return;
+    }
+    evt->service_id = UI_SERVICE;
+    evt->event_type = REQUEST;
+    evt->reply_queue = NULL;   // 本应用无需同步回复
+    evt->data = payload;
+    evt->data_len = sizeof(audio_service_receive_data_t);
+    xQueueSend(get_audio_service_queue(), &evt, 0); 
+    ESP_LOGI(TAG, "Sent audio service request: cmd=%d", cmd);   
 }
 
 static void soundcard_increase_volume(void)
@@ -226,7 +275,7 @@ static void soundcard_increase_volume(void)
     s_volume += 5;
     if (s_volume > 100) s_volume = 100;
 
-    set_volume(s_volume);
+    set_audio_volume(s_volume);    // 使用框架提供的音量设置函数
     if (s_soundcard_ui.volume_bar) {
         lv_bar_set_value(s_soundcard_ui.volume_bar, s_volume, LV_ANIM_ON);
     }
@@ -239,7 +288,7 @@ static void soundcard_decrease_volume(void)
     s_volume -= 5;
     if (s_volume < 0) s_volume = 0;
 
-    set_volume(s_volume);
+    set_audio_volume(s_volume);
     if (s_soundcard_ui.volume_bar) {
         lv_bar_set_value(s_soundcard_ui.volume_bar, s_volume, LV_ANIM_ON);
     }
@@ -248,5 +297,6 @@ static void soundcard_decrease_volume(void)
 
 static void soundcard_app_led_control(led_mode_t mode, uint32_t arg)
 {
+    // TODO: 对接 LED 服务实现实际的灯光控制
     ESP_LOGI(TAG, "LED control: mode=%d, arg=%" PRIu32, mode, arg);
 }

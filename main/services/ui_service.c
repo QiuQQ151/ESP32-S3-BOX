@@ -72,7 +72,7 @@ esp_err_t ui_service_init(void)
     desktop_app_register();
     // radio_app_register();
     // music_app_register();
-    // soundcard_app_register();
+    soundcard_app_register();
 
     // 5. 创建 UI 服务任务
     BaseType_t ret = xTaskCreate(ui_service_task, "ui_service_task", 20*1024, NULL, 4, NULL);
