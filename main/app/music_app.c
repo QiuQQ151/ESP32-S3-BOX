@@ -230,7 +230,7 @@ static void music_on_destroy(ui_app_t *app)
         music_update_status_task_handle = NULL;
     }
     music_handle_change_to_audio(AUDIO_CMD_DISCONNECT);
-    vTaskDelay(pdMS_TO_TICKS(500));
+    //vTaskDelay(pdMS_TO_TICKS(500));
 
     if (track_list) {
         free(track_list);

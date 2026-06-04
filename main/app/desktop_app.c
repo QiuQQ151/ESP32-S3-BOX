@@ -9,6 +9,11 @@
 #include "system_event.h"        // event_data_t, NOTIFICATION, KEYHAL_SERVICE
 #include "keys_hal.h"            // key_event_data_t, KEY_EVENT_*, KEY_ID_*
 
+// ---------- 长按触发打开应用的时间（毫秒） ----------
+// 注意：实际生效的长按时间由 LVGL 全局配置决定，请在 lv_conf.h 中设置 LV_INDEV_DEF_LONG_PRESS_TIME，
+//       或通过 lv_indev_set_long_press_time() （LVGL v8+）进行运行时修改。
+#define DESKTOP_LONG_PRESS_TIME_MS   800
+
 // ---------- 动画类型定义 ----------
 typedef enum {
     DESKTOP_ANIM_NONE  = 0,
@@ -89,7 +94,7 @@ static void desktop_next_item(void);
 static void desktop_prev_item(void);
 static void desktop_open_current(void);
 static void desktop_gesture_handler(lv_event_t *e);
-static void desktop_icon_click_handler(lv_event_t *e);
+static void desktop_icon_long_press_handler(lv_event_t *e);
 
 static void desktop_animate_switch(int direction);
 static void set_opa_cb(void *var, int32_t v);
@@ -121,7 +126,8 @@ static void desktop_on_create(ui_app_t *app)
     icon_img = lv_img_create(desktop_screen);
     lv_obj_align(icon_img, LV_ALIGN_CENTER, 0, -20);
     lv_obj_add_flag(icon_img, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(icon_img, desktop_icon_click_handler, LV_EVENT_CLICKED, NULL);
+    // 将点击事件替换为长按事件
+    lv_obj_add_event_cb(icon_img, desktop_icon_long_press_handler, LV_EVENT_LONG_PRESSED, NULL);
 
     name_label = lv_label_create(desktop_screen);
     lv_obj_set_style_text_color(name_label, lv_color_hex(0xFFFFFF), 0);
@@ -131,6 +137,11 @@ static void desktop_on_create(ui_app_t *app)
     // 初始透明，等待 on_open 设置正确后显示
     lv_obj_set_style_opa(icon_img, LV_OPA_TRANSP, 0);
     lv_obj_set_style_opa(name_label, LV_OPA_TRANSP, 0);
+
+    // 设置长按时间：若使用 LVGL v8+，可取消注释以下两行以运行时设置
+    // lv_indev_t *indev = lv_indev_get_act();
+    // if (indev) lv_indev_set_long_press_time(indev, DESKTOP_LONG_PRESS_TIME_MS);
+    // 否则，请在 lv_conf.h 中设置 LV_INDEV_DEF_LONG_PRESS_TIME 为对应值（例如 800）
 
     current_item_index = 0;
     desktop_update_display();
@@ -308,7 +319,7 @@ static void desktop_open_current(void)
     }
 }
 
-// ---------- 手势与点击 ----------
+// ---------- 手势与长按 ----------
 static void desktop_gesture_handler(lv_event_t *e)
 {
     lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_get_act());
@@ -319,7 +330,8 @@ static void desktop_gesture_handler(lv_event_t *e)
     }
 }
 
-static void desktop_icon_click_handler(lv_event_t *e)
+// 长按图标打开应用
+static void desktop_icon_long_press_handler(lv_event_t *e)
 {
     desktop_open_current();
 }
@@ -638,4 +650,3 @@ void desktop_app_register(void)
     ui_service_register_app(&desktop_app);
     ESP_LOGI(TAG, "Desktop app registered");
 }
-
