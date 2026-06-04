@@ -38,7 +38,7 @@ esp_err_t sntp_service_init(void)
         return ESP_ERR_NO_MEM;
     }
     // 启动任务
-    xTaskCreate(sntp_service_task, "sntp_service_task", 4096, NULL, 4, NULL);  
+    xTaskCreate(sntp_service_task, "sntp_service_task", 4096, NULL, 5, NULL);   // 4
     return ESP_OK;
 }
 

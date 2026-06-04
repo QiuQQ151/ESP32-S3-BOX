@@ -431,7 +431,7 @@ esp_err_t led_service_init(void) {
     if (strips[LED_HAL_DEVICE_FRONT]) led_strip_clear(strips[LED_HAL_DEVICE_FRONT]);
     if (strips[LED_HAL_DEVICE_EXTENSION]) led_strip_clear(strips[LED_HAL_DEVICE_EXTENSION]);
 
-    if (xTaskCreate(led_hal_task, "led_hal_task", 4096, NULL, 2, &led_hal_task_handle) != pdPASS) {
+    if (xTaskCreate(led_hal_task, "led_hal_task", 4096, NULL, 12, &led_hal_task_handle) != pdPASS) {
         ESP_LOGE(TAG, "led_hal_task create fail");
         return ESP_FAIL;
     } else{
@@ -443,7 +443,7 @@ esp_err_t led_service_init(void) {
             return ESP_FAIL;
         } else{
             // 创建LED服务任务
-            if (xTaskCreate(led_service_task, "led_service_task", 4096, NULL, 3, &led_service_task_handle) != pdPASS) {
+            if (xTaskCreate(led_service_task, "led_service_task", 4096, NULL, 12, &led_service_task_handle) != pdPASS) {
                 ESP_LOGE(TAG, "led_service_task create fail");
                 vTaskDelete(led_hal_task_handle);
                 vTaskDelete(led_service_task_handle);

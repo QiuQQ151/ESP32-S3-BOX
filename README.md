@@ -57,16 +57,15 @@
 
 | 任务名            | 优先级 | 核心职责                                                       | 栈建议 |
 |-------------------|--------|----------------------------------------------------------------|--------|
-| `ui_task`         | 8 (高) | LVGL 刷新（主屏，可选扩展屏）、输入事件分发、界面状态机       | 8 KB   |
-| `audio_task`      | 7      | 音乐播放/网络FM解码输出、音量控制、音频焦点管理                | 8 KB   |
-| `led_task`        | 6      | 前面板 & 扩展口 LED 动画刷新（帧率 50Hz），接收模式指令         | 4 KB   |
-| `voice_task`      | 6      | 语音唤醒、对话流程（deepseek API）、TTS 播放、语音识别后处理   | 10 KB  |
-| `clock_task`      | 5      | 系统时间维护、NTP 同步、闹钟触发、番茄钟倒计时                  | 3 KB   |
-| `network_task`    | 5      | Wi-Fi 管理、HTTP 请求（天气、FM列表）、OTA 等                  | 6 KB   |
-| `sensor_task`     | 4      | 周期性采集亮度（ADC）、温湿度（I2C），发布数据                  | 2 KB   |
-| `ext_mgr_task`    | 4      | 扩展口插拔检测、设备识别、动态驱动加载、模式切换                | 4 KB   |
-| `sysmon_task`     | 3      | Power键动作解析（短按/长按/超长按）、通用按键扫描、心跳        | 2 KB   |
-| `ir_task`         | 4      | 红外码库管理、发射调度（使用硬件定时器产生载波）                | 3 KB   |
+|`key_hal_task`| 5  |   |   |
+| `ui_service_task`         | 12 (高) | LVGL 刷新（主屏，可选扩展屏）、输入事件分发、界面状态机       | 8 KB   |
+| `audio_service_task`      | 12      | 音乐播放/网络FM解码输出、音量控制、音频焦点管理                | 8 KB   |
+| `led_hal_task`        | 12      | 前面板 & 扩展口 LED 动画刷新（帧率 50Hz），接收模式指令         | 4 KB   |
+| `led_service_task`        | 12      | 前面板 & 扩展口 LED 动画刷新（帧率 50Hz），接收模式指令         | 4 KB   |
+| `sntp_service_check_wifi_task`        | 2     |          | 4 KB   |
+| `sntp_service_task`      | 5      | 系统时间维护、NTP 同步、闹钟触发、番茄钟倒计时                  | 3 KB   |
+| `wifi_service_task`    | 5      | Wi-Fi 管理、HTTP 请求（天气、FM列表）、OTA 等                  | 6 KB   |
+| `power_service_task`     | 4      | Power键动作解析（短按/长按/超长按）、通用按键扫描、心跳        | 2 KB   |
 
 **任务通信机制**：使用 FreeRTOS 队列、事件组、环形缓冲区；所有 LVGL 操作仅在 `ui_task` 中执行。
 
@@ -290,8 +289,6 @@ void template_app_register(void);
 
 #endif // TEMPLATE_APP_H
 ```
-
-
 ```c
 #include "template_app.h"
 #include "ui_service.h"

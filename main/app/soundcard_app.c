@@ -7,6 +7,8 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "ui_service.h"
+#include "wifi_service.h"
+#include "system_event.h"
 #include "soundcard_app.h"
 #include "system_event.h"
 #include "keys_hal.h"
@@ -59,6 +61,23 @@ void soundcard_app_register(void)
 static void soundcard_on_create(ui_app_t *app)
 {
     ESP_LOGI(TAG, "soundcard_on_create");
+
+    ESP_LOGI(TAG, "stop wifi");
+
+    // 发送 WiFi 断开请求，避免影响接收USB 音频数据
+    wifi_service_receive_data_t *wifi_payload = malloc(sizeof(wifi_service_receive_data_t));
+    if (wifi_payload) {
+        wifi_payload->cmd = WIFI_CMD_DISCONNECT;
+    }
+    event_data_t *evt_data = malloc(sizeof(event_data_t));
+    if (evt_data) {
+        evt_data->service_id = HAL;
+        evt_data->event_type = REQUEST;
+        evt_data->reply_queue = NULL;
+        evt_data->data = wifi_payload;
+        xQueueSend(get_wifi_service_queue(), &evt_data, 0);
+    }
+
 
     app->screen = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(app->screen, lv_color_black(), 0);
@@ -120,6 +139,22 @@ static void soundcard_on_close(ui_app_t *app)
 static void soundcard_on_destroy(ui_app_t *app)
 {
     ESP_LOGI(TAG, "soundcard_on_destroy");
+
+    ESP_LOGI(TAG, "restore wifi");
+    // 发送 WiFi 连接请求
+    wifi_service_receive_data_t *wifi_payload = malloc(sizeof(wifi_service_receive_data_t));
+    if (wifi_payload) {
+        wifi_payload->cmd = WIFI_CMD_CONNECT_SAVED;
+    }
+    event_data_t *evt_data = malloc(sizeof(event_data_t));
+    if (evt_data) {
+        evt_data->service_id = HAL;
+        evt_data->event_type = REQUEST;
+        evt_data->reply_queue = NULL;
+        evt_data->data = wifi_payload;
+        xQueueSend(get_wifi_service_queue(), &evt_data, 0);
+    }
+
     // 断开 USB 音频
     soundcard_handle_change_to_audio(AUDIO_CMD_DISCONNECT);
     ESP_LOGI(TAG, "Sound card disconnected");
@@ -195,6 +230,16 @@ static void soundcard_on_event(ui_app_t *app, event_data_t *event)
                 }
             }
         }
+
+        if (event->service_id == SNTP_SERVICE) {
+            if (event->data) {
+                sntp_service_send_data_t *sntp = (sntp_service_send_data_t *)event->data;
+                if (s_soundcard_ui.time_label) {
+                    lv_label_set_text(s_soundcard_ui.time_label, sntp->current_time);
+                }
+            }
+        }
+
     }
 
     if (event->data) free(event->data);
@@ -216,8 +261,24 @@ static void soundcard_update_dis_cb(lv_timer_t *timer)
 
 static void soundcard_update_time(void)
 {
-    // 预留 SNTP 时间更新
-    lv_label_set_text(s_soundcard_ui.time_label, "12:34:56");
+    //SNTP 时间更新
+    sntp_service_receive_data_t *sntp_payload = malloc(sizeof(sntp_service_receive_data_t));
+    if (!sntp_payload) return;
+    sntp_payload->cmd = SNTP_CMD_GET_TIME;
+
+    event_data_t *evt = malloc(sizeof(event_data_t));
+    if (!evt) { free(sntp_payload); return; }
+    evt->service_id = UI_SERVICE;
+    evt->event_type = REQUEST;
+    evt->reply_queue = get_ui_service_queue();
+    evt->data = sntp_payload;
+    evt->data_len = sizeof(sntp_service_receive_data_t);
+
+    if (xQueueSend(get_sntp_service_queue(), &evt, 0) != pdPASS) {
+        free(sntp_payload);
+        free(evt);
+    }    
+    ESP_LOGI(TAG, "Requested time update from SNTP service");
 }
 
 static void soundcard_handle_change_to_audio(audio_service_cmd_t cmd)
@@ -277,7 +338,7 @@ static void soundcard_handle_change_to_audio(audio_service_cmd_t cmd)
 static void soundcard_increase_volume(void)
 {
     if (s_volume >= 100) return;
-    s_volume += 5;
+    s_volume += 2;
     if (s_volume > 100) s_volume = 100;
     set_audio_volume(s_volume);    // 使用框架提供的音量设置函数
     ESP_LOGI(TAG, "Volume increased to %d", s_volume);
@@ -286,7 +347,7 @@ static void soundcard_increase_volume(void)
 static void soundcard_decrease_volume(void)
 {
     if (s_volume <= 0) return;
-    s_volume -= 5;
+    s_volume -= 2;
     if (s_volume < 0) s_volume = 0;
 
     set_audio_volume(s_volume);

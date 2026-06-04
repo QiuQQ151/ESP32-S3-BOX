@@ -99,7 +99,7 @@ esp_err_t audio_service_init(void)
         return ESP_ERR_NO_MEM;
     }
 
-    xTaskCreate(audio_service_task, "audio_srv", 16 * 1024, NULL, 6, NULL);
+    xTaskCreate(audio_service_task, "audio_srv", 16 * 1024, NULL, 12, NULL); // 6
 
     return ESP_OK;
 }
@@ -279,19 +279,19 @@ static audio_element_handle_t create_element_by_role(audio_service_stream_type_t
        switch (type) {
            // 编解码器
             case mp3_dec: {
-                mp3_decoder_cfg_t cfg = { .out_rb_size = 8*1024, .task_stack = 6*1024,.task_core = 0, .task_prio = 7, .stack_in_ext = true };
+                mp3_decoder_cfg_t cfg = { .out_rb_size = 8*1024, .task_stack = 6*1024,.task_core = 0, .task_prio = 12, .stack_in_ext = true };
                 return mp3_decoder_init(&cfg);
             }
             case aac_dec: {
-                aac_decoder_cfg_t cfg = { .out_rb_size = 8*1024, .task_stack = 8*1024,.task_core = 0, .task_prio = 7, .stack_in_ext = true };
+                aac_decoder_cfg_t cfg = { .out_rb_size = 8*1024, .task_stack = 8*1024,.task_core = 0, .task_prio = 12, .stack_in_ext = true };
                 return aac_decoder_init(&cfg);
             }
             case flac_dec: {
-                flac_decoder_cfg_t cfg = { .out_rb_size = 36*1024, .task_stack = 24*1024,.task_core = 0, .task_prio = 7, .stack_in_ext = true };
+                flac_decoder_cfg_t cfg = { .out_rb_size = 36*1024, .task_stack = 24*1024,.task_core = 0, .task_prio = 12, .stack_in_ext = true };
                 return flac_decoder_init(&cfg);
             }
             case wav_dec: {
-                wav_decoder_cfg_t cfg = { .out_rb_size = 8*1024, .task_stack = 6*1024,.task_core = 0, .task_prio = 7, .stack_in_ext = true };
+                wav_decoder_cfg_t cfg = { .out_rb_size = 8*1024, .task_stack = 6*1024,.task_core = 0, .task_prio = 12, .stack_in_ext = true };
                 return wav_decoder_init(&cfg);
             }
             // 流元素

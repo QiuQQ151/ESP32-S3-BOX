@@ -75,7 +75,7 @@ esp_err_t ui_service_init(void)
     soundcard_app_register();
 
     // 5. 创建 UI 服务任务
-    BaseType_t ret = xTaskCreate(ui_service_task, "ui_service_task", 20*1024, NULL, 4, NULL);
+    BaseType_t ret = xTaskCreate(ui_service_task, "ui_service_task", 20*1024, NULL, 12, NULL); //4
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create UI task");
         return ESP_ERR_NO_MEM;
