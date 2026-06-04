@@ -35,7 +35,7 @@ static void soundcard_on_open(ui_app_t *app);
 static void soundcard_on_close(ui_app_t *app);
 static void soundcard_on_destroy(ui_app_t *app);
 static void soundcard_on_event(ui_app_t *app, event_data_t *event);
-static void soundcard_update_timer_cb(lv_timer_t *timer);
+static void soundcard_update_dis_cb(lv_timer_t *timer);
 static void soundcard_update_time(void);
 static void soundcard_handle_change_to_audio(audio_service_cmd_t cmd);
 static void soundcard_increase_volume(void);
@@ -74,7 +74,8 @@ static void soundcard_on_create(ui_app_t *app)
     // 模式文字
     s_soundcard_ui.mode_label = lv_label_create(app->screen);
     lv_obj_set_style_text_color(s_soundcard_ui.mode_label, lv_color_white(), 0);
-    lv_obj_set_style_text_font(s_soundcard_ui.mode_label, &lv_font_montserrat_14, 0);
+    LV_FONT_DECLARE(font_alipuhui20);
+    lv_obj_set_style_text_font(s_soundcard_ui.mode_label, &font_alipuhui20, 0);
     lv_label_set_text(s_soundcard_ui.mode_label, "声卡工作中");
     lv_obj_align(s_soundcard_ui.mode_label, LV_ALIGN_CENTER, -20, 0);
 
@@ -89,15 +90,15 @@ static void soundcard_on_create(ui_app_t *app)
 
     // 音量进度条
     s_soundcard_ui.volume_bar = lv_bar_create(app->screen);
-    lv_obj_set_size(s_soundcard_ui.volume_bar, 200, 15);
+    lv_obj_set_size(s_soundcard_ui.volume_bar, 150, 15);
     lv_obj_align(s_soundcard_ui.volume_bar, LV_ALIGN_BOTTOM_MID, 0, -20);
     lv_bar_set_range(s_soundcard_ui.volume_bar, 0, 100);
-    lv_bar_set_value(s_soundcard_ui.volume_bar, s_volume, LV_ANIM_OFF);
+    lv_bar_set_value(s_soundcard_ui.volume_bar, get_audio_volume(), LV_ANIM_OFF);
     lv_obj_set_style_bg_color(s_soundcard_ui.volume_bar, lv_color_hex(0x333333), LV_PART_MAIN);
     lv_obj_set_style_bg_color(s_soundcard_ui.volume_bar, lv_color_make(0, 255, 0), LV_PART_INDICATOR);
 
     // 定时器
-    s_soundcard_ui.update_timer = lv_timer_create(soundcard_update_timer_cb, 500, NULL);
+    s_soundcard_ui.update_timer = lv_timer_create(soundcard_update_dis_cb, 500, NULL);
 
     // 启动 USB 声卡
     soundcard_handle_change_to_audio(AUDIO_CMD_CONNECT);
@@ -200,13 +201,17 @@ static void soundcard_on_event(ui_app_t *app, event_data_t *event)
     free(event);
 }
 
-static void soundcard_update_timer_cb(lv_timer_t *timer)
+static void soundcard_update_dis_cb(lv_timer_t *timer)
 {
+    // 时间
     soundcard_update_time();
-
     s_soundcard_ui.dot_visible = !s_soundcard_ui.dot_visible;
     lv_color_t color = s_soundcard_ui.dot_visible ? lv_color_make(0, 255, 0) : lv_color_black();
     lv_obj_set_style_bg_color(s_soundcard_ui.status_dot, color, 0);
+    // 音量条
+    if (s_soundcard_ui.volume_bar) {
+        lv_bar_set_value(s_soundcard_ui.volume_bar, get_audio_volume(), LV_ANIM_ON); // 同步显示实际音量
+    }
 }
 
 static void soundcard_update_time(void)
@@ -274,11 +279,7 @@ static void soundcard_increase_volume(void)
     if (s_volume >= 100) return;
     s_volume += 5;
     if (s_volume > 100) s_volume = 100;
-
     set_audio_volume(s_volume);    // 使用框架提供的音量设置函数
-    if (s_soundcard_ui.volume_bar) {
-        lv_bar_set_value(s_soundcard_ui.volume_bar, s_volume, LV_ANIM_ON);
-    }
     ESP_LOGI(TAG, "Volume increased to %d", s_volume);
 }
 
@@ -289,9 +290,6 @@ static void soundcard_decrease_volume(void)
     if (s_volume < 0) s_volume = 0;
 
     set_audio_volume(s_volume);
-    if (s_soundcard_ui.volume_bar) {
-        lv_bar_set_value(s_soundcard_ui.volume_bar, s_volume, LV_ANIM_ON);
-    }
     ESP_LOGI(TAG, "Volume decreased to %d", s_volume);
 }
 

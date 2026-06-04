@@ -1,4 +1,5 @@
 #include <string.h>
+#include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -49,7 +50,7 @@ static audio_service_state_t audio_out_state = AUDIO_SERVICE_IDLE;
 static audio_service_state_t audio_in_state = AUDIO_SERVICE_IDLE;
 static char   el_url[200] = {0};  // 文件url
 static audio_element_info_t info = {0}; // 当前播放/录音的音频格式信息
-static int    audio_volume = 50;
+static int    audio_volume = 0;
 static bool   g_uac_active = false;
 static bool   audio_out_active = false;
 static bool   audio_in_active = false;
@@ -70,6 +71,7 @@ static void send_notification(audio_service_cmd_t cmd);
 static esp_err_t uac_output_cb(uint8_t *data, size_t len, void *arg);
 static esp_err_t uac_input_cb(uint8_t *data, size_t len, size_t *bytes_read, void *arg);
 static void uac_volume_cb(uint32_t vol, void *arg);
+static void uac_mute_cb(uint32_t mute, void *arg);
 
 // 统一管线构建
 static esp_err_t build_pipeline(audio_service_stream_type_t prv_type,
@@ -376,7 +378,7 @@ static esp_err_t build_pipeline(audio_service_stream_type_t prv_type,
                 .output_cb     = uac_output_cb,
                 .input_cb      = uac_input_cb,
                 .set_volume_cb = uac_volume_cb,
-                .set_mute_cb   = NULL,
+                .set_mute_cb   = uac_mute_cb,
             };
             if (uac_device_init(&uac_cfg) != ESP_OK) {
                 ESP_LOGE(TAG, "UAC device init failed");
@@ -588,7 +590,37 @@ static esp_err_t uac_input_cb(uint8_t *data, size_t len, size_t *bytes_read, voi
     return ESP_FAIL;
 }
 
+static int vol_to_x(uint32_t vol) {
+    if (vol == 0 || vol >= 100) {
+        // ln(0) 负无穷，这里按 0 处理（可根据实际需求修改）
+        return vol;
+    } 
+    double ratio = (double)vol / 124.0;
+    double x = (log(ratio) + 1.0) * 100.0;
+    return (int)x;   // 直接截断取整，如需四舍五入可改为 (int)(x + 0.5) 等
+}
+
 static void uac_volume_cb(uint32_t vol, void *arg)
 {
-    set_audio_volume((int)vol);
+    int vol_x = vol_to_x(vol);
+    set_audio_volume(vol_x);
+    ESP_LOGI(TAG, "Volume set to %d via UAC callback", vol_x);
+}
+
+static void uac_mute_cb(uint32_t mute, void *arg)
+{
+    static int last_volume = 0; // 用于恢复音量的临时变量
+    static bool is_muted = false; // 当前静音状态 // uac设定立体声，实际硬件为单声道，会收到两次回调，只需处理一次
+    if( mute > 0 && is_muted == false ){
+        // 激活静音
+        is_muted = true;
+        last_volume = audio_volume; // 保存当前音量以便恢复
+        ESP_LOGI(TAG, "Muting audio via UAC callback, saving volume %d", last_volume);
+        set_audio_volume(0);
+    } else if( mute == 0 && is_muted == true ){
+        is_muted = false;
+        ESP_LOGI(TAG, "Unmuting audio via UAC callback, restoring volume %d", last_volume);
+        set_audio_volume(last_volume);
+    }
+    ESP_LOGI(TAG, "Mute set to %ld via UAC callback", mute);
 }
