@@ -333,8 +333,8 @@ static audio_element_handle_t create_element_by_role(audio_service_stream_type_t
                 i2s_stream_cfg_t i2s_cfg = I2S_STREAM_CFG_DEFAULT_WITH_PARA(I2S_NUM_0, 48000, I2S_DATA_BIT_WIDTH_16BIT, AUDIO_STREAM_READER);
                 i2s_cfg.type = (is_output == true) ? AUDIO_STREAM_WRITER : AUDIO_STREAM_READER; // 播放到喇叭往i2s写，录音从i2s读
                 if(is_output){
-                    i2s_cfg.chan_cfg.dma_desc_num = 8; 
-                    i2s_cfg.chan_cfg.dma_frame_num = 256; 
+                    i2s_cfg.chan_cfg.dma_desc_num = 16; //8
+                    i2s_cfg.chan_cfg.dma_frame_num = 128; //256
                     i2s_cfg.task_stack = 4*1024; //
                     i2s_cfg.buffer_len = 12*100; //
                     i2s_cfg.stack_in_ext = true; // 允许任务栈在 PSRAM（如果需要更大的栈）  

@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <dirent.h>
+#include <sys/stat.h>
 #include "esp_log.h"
 #include "lvgl.h"
 #include "freertos/FreeRTOS.h"
@@ -49,6 +50,7 @@ static music_track_t *track_list = NULL;
 static int track_count = 0;
 static int current_track_index = 0;
 static int volume = 50;
+LV_FONT_DECLARE(font_alipuhui20);
 
 // ---------- 内部函数声明 ----------
 static void music_on_create(ui_app_t *app);
@@ -122,10 +124,13 @@ static void music_on_create(ui_app_t *app)
     lv_obj_set_style_pad_all(track_area, 0, 0);
 
     s_music_ui.track_label = lv_label_create(track_area);
-    lv_label_set_text(s_music_ui.track_label,
-                      (track_count > 0) ? track_list[current_track_index].name : "无音乐");
+    
+    // 测试：直接显示硬编码的中文，验证字体是否支持中文
+    // 如果这个能显示，说明字体支持中文，问题在编码转换
+    // 如果这个不能显示，说明字体本身不支持中文
+    lv_label_set_text(s_music_ui.track_label, "测试中文");
+    
     lv_obj_set_style_text_color(s_music_ui.track_label, lv_color_white(), 0);
-    LV_FONT_DECLARE(font_alipuhui20);
     lv_obj_set_style_text_font(s_music_ui.track_label, &font_alipuhui20, 0);
     lv_obj_set_width(s_music_ui.track_label, 135);
     lv_label_set_long_mode(s_music_ui.track_label, LV_LABEL_LONG_SCROLL_CIRCULAR);
@@ -191,17 +196,20 @@ static void music_on_create(ui_app_t *app)
 
     // 扫描音乐并自动播放第一首
     if (music_scan_directory(MUSIC_ROOT_PATH) > 0) {
+        // 延迟显示，先显示测试中文
+        vTaskDelay(pdMS_TO_TICKS(2000));
         lv_label_set_text(s_music_ui.track_label, track_list[0].name);
+        lv_obj_set_style_text_font(s_music_ui.track_label, &font_alipuhui20, 0);
     }
 
-    volume = 60;
+    volume = get_audio_volume();
     if (track_count > 0) {
         s_music_ui.playing = true;
         lv_img_set_src(s_music_ui.play_icon, &icon_play_40);
         music_handle_change_to_audio(AUDIO_CMD_CONNECT);
     }
 
-    // 创建时间更新任务（不再查询播放进度）
+    // 创建时间更新任务
     xTaskCreate(music_update_status_task, "music_update_status", 4096, NULL, 5,
                 &music_update_status_task_handle);
     music_app_led_control(LED_MODE_MUSIC, 100);
@@ -212,9 +220,9 @@ static void music_on_open(ui_app_t *app)
 {
     if (s_music_ui.track_label && track_count > 0) {
         lv_label_set_text(s_music_ui.track_label, track_list[current_track_index].name);
+        lv_obj_set_style_text_font(s_music_ui.track_label, &font_alipuhui20, 0);
     }
-    ESP_LOGI(TAG, "music_on_open, current track: %s",
-             (track_count > 0) ? track_list[current_track_index].name : "none");
+    ESP_LOGI(TAG, "music_on_open");
 }
 
 static void music_on_close(ui_app_t *app)
@@ -230,7 +238,6 @@ static void music_on_destroy(ui_app_t *app)
         music_update_status_task_handle = NULL;
     }
     music_handle_change_to_audio(AUDIO_CMD_DISCONNECT);
-    //vTaskDelay(pdMS_TO_TICKS(500));
 
     if (track_list) {
         free(track_list);
@@ -259,7 +266,6 @@ static void music_on_event(ui_app_t *app, event_data_t *event)
         } else if (event->service_id == AUDIO_SERVICE) {
             audio_service_send_data_t *audio_ntf = (audio_service_send_data_t *)event->data;
             if (audio_ntf) {
-                // 仅处理播放结束和错误通知
                 if (audio_ntf->cmd == AUDIO_CMD_END) {
                     ESP_LOGI(TAG, "Track finished, playing next");
                     music_next_track();
@@ -314,7 +320,7 @@ static bool music_handle_key_event(key_event_data_t *key)
     return false;
 }
 
-// ========== 状态更新任务（仅更新时间） ==========
+// ========== 状态更新任务 ==========
 static void music_update_status_task(void *arg)
 {
     while (1) {
@@ -365,6 +371,7 @@ static void music_prev_track(void)
     current_track_index = (current_track_index - 1 + track_count) % track_count;
     if (s_music_ui.track_label) {
         lv_label_set_text(s_music_ui.track_label, track_list[current_track_index].name);
+        lv_obj_set_style_text_font(s_music_ui.track_label, &font_alipuhui20, 0);
     }
     s_music_ui.playing = true;
     lv_img_set_src(s_music_ui.play_icon, &icon_play_40);
@@ -377,6 +384,7 @@ static void music_next_track(void)
     current_track_index = (current_track_index + 1) % track_count;
     if (s_music_ui.track_label) {
         lv_label_set_text(s_music_ui.track_label, track_list[current_track_index].name);
+        lv_obj_set_style_text_font(s_music_ui.track_label, &font_alipuhui20, 0);
     }
     s_music_ui.playing = true;
     lv_img_set_src(s_music_ui.play_icon, &icon_play_40);
@@ -395,18 +403,16 @@ static void music_refresh(void)
 
     if (music_scan_directory(MUSIC_ROOT_PATH) > 0) {
         lv_label_set_text(s_music_ui.track_label, track_list[0].name);
+        lv_obj_set_style_text_font(s_music_ui.track_label, &font_alipuhui20, 0);
         s_music_ui.playing = true;
         lv_img_set_src(s_music_ui.play_icon, &icon_play_40);
         music_handle_change_to_audio(AUDIO_CMD_CONNECT);
     } else {
         lv_label_set_text(s_music_ui.track_label, "无音乐");
+        lv_obj_set_style_text_font(s_music_ui.track_label, &font_alipuhui20, 0);
     }
 }
 
-/**
- * @brief 向 audio 服务发送命令
- * @param cmd 命令字，CONNECT 时自动填充曲目、解码器等信息
- */
 static void music_handle_change_to_audio(audio_service_cmd_t cmd)
 {
     audio_service_receive_data_t *audio_payload = malloc(sizeof(audio_service_receive_data_t));
@@ -418,7 +424,6 @@ static void music_handle_change_to_audio(audio_service_cmd_t cmd)
     audio_payload->cmd = cmd;
     audio_payload->volume = volume;
 
-    // 连接命令需要提供音频来源、解码器和输出方式
     if (cmd == AUDIO_CMD_CONNECT && track_count > 0) {
         const char *name = track_list[current_track_index].name;
         const char *ext = strrchr(name, '.');
@@ -502,9 +507,15 @@ static void scan_dir_recursive(const char *dir_path, int *count)
         int written = snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, entry->d_name);
         if (written >= sizeof(full_path)) continue;
 
-        if (entry->d_type == DT_DIR) {
+        // 使用 stat 代替 d_type
+        struct stat st;
+        if (stat(full_path, &st) != 0) continue;
+
+        if (S_ISDIR(st.st_mode)) {
+            // 递归进入子目录
             scan_dir_recursive(full_path, count);
-        } else {
+        } else if (S_ISREG(st.st_mode)) {
+            // 检查是否是音乐文件
             const char *ext = strrchr(entry->d_name, '.');
             if (!ext) continue;
             if (strcasecmp(ext, ".mp3") == 0 ||
@@ -543,6 +554,5 @@ static int music_scan_directory(const char *root)
         track_list = (music_track_t *)realloc(track_list, count * sizeof(music_track_t));
     }
     track_count = count;
-    ESP_LOGI(TAG, "Scanned %d tracks from %s", count, root);
     return count;
 }

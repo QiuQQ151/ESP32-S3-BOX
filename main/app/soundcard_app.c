@@ -278,7 +278,7 @@ static void soundcard_update_time(void)
         free(sntp_payload);
         free(evt);
     }    
-    ESP_LOGI(TAG, "Requested time update from SNTP service");
+    //ESP_LOGI(TAG, "Requested time update from SNTP service");
 }
 
 static void soundcard_handle_change_to_audio(audio_service_cmd_t cmd)
