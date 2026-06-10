@@ -138,20 +138,19 @@ static void desktop_on_create(ui_app_t *app)
     lv_obj_set_style_opa(icon_img, LV_OPA_TRANSP, 0);
     lv_obj_set_style_opa(name_label, LV_OPA_TRANSP, 0);
 
-    // 设置长按时间：若使用 LVGL v8+，可取消注释以下两行以运行时设置
-    // lv_indev_t *indev = lv_indev_get_act();
-    // if (indev) lv_indev_set_long_press_time(indev, DESKTOP_LONG_PRESS_TIME_MS);
-    // 否则，请在 lv_conf.h 中设置 LV_INDEV_DEF_LONG_PRESS_TIME 为对应值（例如 800）
-
     current_item_index = 0;
     desktop_update_display();
     app->screen = desktop_screen;
 
+}
+
+static void desktop_on_open(ui_app_t *app)
+{
     // 请求LED服务设置模式
     led_service_receive_data_t* led_payload = (led_service_receive_data_t*)malloc(sizeof(led_service_receive_data_t));
     if(led_payload){
         led_payload->device = LED_HAL_DEVICE_FRONT;
-        led_payload->mode = LED_MODE_BREATH;
+        led_payload->mode = LED_MODE_OFF;
         led_payload->brightness = 100;
         led_payload->arg = 0;
         
@@ -170,10 +169,7 @@ static void desktop_on_create(ui_app_t *app)
     } else {
         ESP_LOGE(TAG, "malloc led_service_receive_data_t err");
     }
-}
 
-static void desktop_on_open(ui_app_t *app)
-{
     // 根据上次启动的应用设定高亮图标
     const char *last_app = ui_service_get_last_launched_app();
     if (last_app) {

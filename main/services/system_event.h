@@ -5,14 +5,15 @@
 
 // 定义来源
 typedef enum{
-  HAL = 0,  // driver HAL层事件
+  HAL = 0,  // main_app HAL层事件
   UI_SERVICE = 1,
   SNTP_SERVICE,
   WIFI_SERVICE,
   POWER_SERVICE,
   LED_SERVICE,
   AUDIO_SERVICE,
-  KEYHAL_SERVICE,
+  KEYHAL_SERVICE, // 底层按键HAL层事件
+  TCAHAL_SERVICE, // 底层TCA9535 HAL层事件
 } service_id_t;
 
 // 定义事件类型

@@ -16,7 +16,6 @@
 // Services
 #include "services/system_event.h"
 #include "services/wifi_service.h"
-#include "services/power_service.h"
 #include "services/sntp_service.h"
 #include "services/audio_service.h"
 #include "services/ui_service.h"
@@ -52,9 +51,9 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
+    audio_service_init(); //i2c->tca9535->power_hal
     led_service_init();
     wifi_service_init();
-    audio_service_init();
     sntp_service_init();
     ui_service_init();
 
@@ -62,7 +61,7 @@ void app_main(void)
     wifi_service_receive_data_t *wifi_payload = malloc(sizeof(wifi_service_receive_data_t));
     if (wifi_payload) {
         wifi_payload->cmd = WIFI_CMD_CONNECT;
-        strcpy(wifi_payload->ssid, "MEIZU 21 Pro");
+        strcpy(wifi_payload->ssid, "WIN10-HFMP");
         strcpy(wifi_payload->password, "1234567890");
         wifi_payload->save = true;
     }

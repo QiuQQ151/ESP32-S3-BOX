@@ -140,7 +140,7 @@ lv_disp_t* lvgl_hal_init(void)
 
     // =========================== 初始化液晶屏背光 ====================================
     lvgl_hal_brightness_init();
-    lvgl_hal_set_brightness(70);
+    lvgl_hal_set_brightness(20);
 
     // =========================lcd初始化=====================================================
     ESP_LOGI(TAG, "Initialize SPI bus");
@@ -179,20 +179,6 @@ lv_disp_t* lvgl_hal_init(void)
     ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_handle, true));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
 
-    // ==========================touch初始化====================================================
-    // // 用旧版驱动安装 I2C 总线
-    // i2c_config_t i2c_conf = {
-    //     .mode = I2C_MODE_MASTER,
-    //     .sda_io_num = I2C_SDA,
-    //     .scl_io_num = I2C_SCL,
-    //     .sda_pullup_en = GPIO_PULLUP_ENABLE,
-    //     .scl_pullup_en = GPIO_PULLUP_ENABLE,
-    //     .master.clk_speed = 400000,
-    //     .clk_flags = 0,
-    // };
-    // ESP_ERROR_CHECK(i2c_param_config(I2C_NUM, &i2c_conf));
-    // ESP_ERROR_CHECK(i2c_driver_install(I2C_NUM, I2C_MODE_MASTER, 0, 0, 0));
-    // audio_service中初始化了iic，I2C_NUM0
     i2c_scan_simple();
     // 2. 配置触摸 IO （使用旧 API，注意不是 _v2）
     esp_lcd_panel_io_i2c_config_t tp_io_config = {

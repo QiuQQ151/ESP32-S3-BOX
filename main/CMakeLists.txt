@@ -5,9 +5,8 @@ set(SOURCES
     
     # HAL - 核心驱动
     hal/wifi_hal.c  # wifi
-    hal/tca9535_hal.c  # IO扩展
-    hal/power_hal.c #电源使能
-    #hal/led_hal.c # led
+    hal/tca9535_hal.c  # IO扩展 包含电源使能
+    #hal/power_hal.c #电源使能
     hal/sd_hal.c #SD卡
 
     hal/it7259_hal.c  # LCD触摸
@@ -20,9 +19,8 @@ set(SOURCES
     services/wifi_service.c   # wifi服务
     services/audio_service.c  # 音频 
     services/sntp_service.c # 校时服务 
-    services/led_service.c  # 灯效   
+    services/led_service.c  # 灯效 （底层hal集成）  
     services/ui_service.c   # 界面
-    # services/power_service.c  # 电源服务
     
     # App 层
     app/desktop_app.c

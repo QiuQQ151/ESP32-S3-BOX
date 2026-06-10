@@ -458,15 +458,13 @@ static void music_handle_change_to_audio(audio_service_cmd_t cmd)
 }
 
 static void music_increase_volume(void) {
-    if (volume >= 100) return;
-    volume += 1;
+    volume = get_audio_volume() + 1;
     set_audio_volume(volume);
     music_app_led_control(LED_MODE_VOLUME, volume);
 }
 
 static void music_decrease_volume(void) {
-    if (volume <= 0) return;
-    volume -= 1;
+    volume = get_audio_volume() - 1;
     set_audio_volume(volume);
     music_app_led_control(LED_MODE_VOLUME, volume);
 }

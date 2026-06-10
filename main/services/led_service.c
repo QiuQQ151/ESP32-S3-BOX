@@ -29,7 +29,7 @@
 // =================== 其他参数 ===================
 #define BREATH_PERIOD_MS    4000
 #define RUN_SPEED_MS        100
-#define VOLUME_DISPLAY_MS   3000
+#define VOLUME_DISPLAY_MS   2000
 #define ALERT_BLINK_MS      500
 #define ALERT_TIMES         3
 
@@ -52,11 +52,12 @@ typedef struct {
     uint8_t volume_level;
     uint8_t volume_brightness;
     uint8_t alert_brightness;
+    uint32_t solid_color;           // 纯色模式颜色 (0x00RRGGBB)
 } panel_state_t;
 
 static panel_state_t panel[LED_HAL_DEVICE_MAX] = {
-    { .mode = LED_MODE_RUN, .brightness = 40 },
-    { .mode = LED_MODE_BREATH, .brightness = 40 },
+    { .mode = LED_MODE_SOLID, .brightness = 40, .solid_color = 0x00FF0000 },
+    { .mode = LED_MODE_BREATH, .brightness = 40, .solid_color = 0x0000FF00 },
 };
 
 static portMUX_TYPE mode_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -198,7 +199,7 @@ static void render_volume_panel(void)
         taskEXIT_CRITICAL(&mode_mux);
         return;
     }
-    uint32_t count = (uint32_t)(p->volume_level  * LED_FRONT_COUNT / 100.0f);
+    uint32_t count = (uint32_t)(p->volume_level * LED_FRONT_COUNT / 100.0f);
     if (count > LED_FRONT_COUNT) count = LED_FRONT_COUNT;
     for (int i = 0; i < LED_FRONT_COUNT; i++) {
         uint8_t r = 0, g = 0, b = 0;
@@ -242,6 +243,22 @@ static void render_alert_panel(void)
     );
 }
 
+static void render_solid_panel(led_hal_device_t dev, uint8_t brightness, uint32_t color)
+{
+    uint32_t count = (dev == LED_HAL_DEVICE_FRONT) ? LED_FRONT_COUNT : LED_EXTENSION_COUNT;
+    uint8_t r = (color >> 16) & 0xFF;
+    uint8_t g = (color >> 8) & 0xFF;
+    uint8_t b = color & 0xFF;
+
+    for (int i = 0; i < count; i++) {
+        led_strip_set_pixel(strips[dev], i,
+                            (g * brightness) / 255,
+                            (r * brightness) / 255,
+                            (b * brightness) / 255);
+    }
+    led_strip_refresh(strips[dev]);
+}
+
 // =================== 效果任务 ===================
 static void led_hal_task(void *arg)
 {
@@ -255,9 +272,11 @@ static void led_hal_task(void *arg)
 
             led_mode_t mode;
             uint8_t brightness;
+            uint32_t solid_color;
             taskENTER_CRITICAL(&mode_mux);
             mode = panel[d].mode;
             brightness = panel[d].brightness;
+            solid_color = panel[d].solid_color;
             taskEXIT_CRITICAL(&mode_mux);
 
             switch (mode) {
@@ -291,6 +310,9 @@ static void led_hal_task(void *arg)
                     if (d == LED_HAL_DEVICE_FRONT) render_alert_panel();
                     else render_off_panel(d);
                     break;
+                case LED_MODE_SOLID:
+                    render_solid_panel(d, brightness, solid_color);
+                    break;
             }
         }
     }
@@ -304,6 +326,7 @@ static void led_hal_task(void *arg)
  * @param arg        附加参数：
  *                   - 时钟模式：倒计时秒数 (1~3600)
  *                   - 音量模式：音量值 (0~255)
+ *                   - 纯色模式：颜色值 (0x00RRGGBB)
  *                   - 其他模式：忽略（传 0）
  */
 static esp_err_t led_hal_set_panel_mode(led_hal_device_t dev, led_mode_t mode,
@@ -353,6 +376,13 @@ static esp_err_t led_hal_set_panel_mode(led_hal_device_t dev, led_mode_t mode,
             p->mode = LED_MODE_ALERT;
             break;
         }
+        case LED_MODE_SOLID: {
+            p->solid_color = arg;   // 0x00RRGGBB
+            p->mode = mode;
+            p->brightness = brightness;
+            p->prev_mode = mode;
+            break;
+        }
         default: {
             p->mode = mode;
             p->brightness = brightness;
@@ -366,8 +396,6 @@ static esp_err_t led_hal_set_panel_mode(led_hal_device_t dev, led_mode_t mode,
     return ESP_OK;
 }
 
-
-
 /* ========== 主任务：分发请求 ========== */
 static void led_service_task(void *arg) {
     event_data_t *evt_data;
@@ -375,18 +403,18 @@ static void led_service_task(void *arg) {
         if (xQueueReceive(led_service_request_queue, &evt_data, portMAX_DELAY) == pdTRUE) {
             if (evt_data->event_type == REQUEST) {
                 led_service_receive_data_t *payload = (led_service_receive_data_t *)evt_data->data;
-                if ( payload){
+                if (payload) {
                     ESP_LOGI(TAG, "led service req: dev:%d mode:%d", payload->device, payload->mode);
-                    led_hal_set_panel_mode(payload->device, payload->mode, payload->brightness, payload->arg);                  
+                    led_hal_set_panel_mode(payload->device, payload->mode, payload->brightness, payload->arg);
                 }
             } else {
                 ESP_LOGE(TAG, "led service unsupported event type %d", evt_data->event_type);
             }
-            if(evt_data->data){
+            if (evt_data->data) {
                 free(evt_data->data);
                 evt_data->data = NULL;
             }
-            if(evt_data){
+            if (evt_data) {
                 free(evt_data);
                 evt_data = NULL;
             }
@@ -434,23 +462,24 @@ esp_err_t led_service_init(void) {
     if (xTaskCreate(led_hal_task, "led_hal_task", 4096, NULL, 12, &led_hal_task_handle) != pdPASS) {
         ESP_LOGE(TAG, "led_hal_task create fail");
         return ESP_FAIL;
-    } else{
-        // 创建对外服务队列，用于接收其他服务的请求
-        led_service_request_queue = xQueueCreate(20, sizeof(event_data_t));
-        if (!led_service_request_queue) {
-            ESP_LOGE(TAG, "led_service_request_queue create fail");
-            vTaskDelete(led_hal_task_handle);
-            return ESP_FAIL;
-        } else{
-            // 创建LED服务任务
-            if (xTaskCreate(led_service_task, "led_service_task", 4096, NULL, 12, &led_service_task_handle) != pdPASS) {
-                ESP_LOGE(TAG, "led_service_task create fail");
-                vTaskDelete(led_hal_task_handle);
-                vTaskDelete(led_service_task_handle);
-                return ESP_FAIL;
-            }
-        }
     }
+
+    // 创建对外服务队列，用于接收其他服务的请求
+    led_service_request_queue = xQueueCreate(20, sizeof(event_data_t));
+    if (!led_service_request_queue) {
+        ESP_LOGE(TAG, "led_service_request_queue create fail");
+        vTaskDelete(led_hal_task_handle);
+        return ESP_FAIL;
+    }
+
+    // 创建LED服务任务
+    if (xTaskCreate(led_service_task, "led_service_task", 4096, NULL, 12, &led_service_task_handle) != pdPASS) {
+        ESP_LOGE(TAG, "led_service_task create fail");
+        vTaskDelete(led_hal_task_handle);
+        vQueueDelete(led_service_request_queue);
+        return ESP_FAIL;
+    }
+
     initialized = true;
     ESP_LOGI(TAG, "LED HAL ready");
     return ESP_OK;

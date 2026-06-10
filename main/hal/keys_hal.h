@@ -21,9 +21,9 @@ typedef enum {
  * @brief 按键 ID 定义
  */
 typedef enum {
-    KEY_ID_ENCODER_SW = 0,   // 编码器上的按键
-    KEY_ID_BACK,        // 独立按键1
-    KEY_ID_ENTER        // 独立按键2
+    KEY_ID_ENCODER_SW = 0, // 编码器上的按键
+    KEY_ID_BACK,           // 独立按键1
+    KEY_ID_ENTER,           // 独立按键2
 } key_id_t;
 
 /**

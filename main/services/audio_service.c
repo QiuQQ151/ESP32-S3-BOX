@@ -19,7 +19,7 @@
 #include "raw_stream.h"
 #include "usb_device_uac.h"
 #include "board.h"
-#include "hal/power_hal.h"
+#include "hal/tca9535_hal.h"
 #include "hal/sd_hal.h"
 
 #include "system_event.h"
@@ -50,7 +50,7 @@ static audio_service_state_t audio_out_state = AUDIO_SERVICE_IDLE;
 static audio_service_state_t audio_in_state = AUDIO_SERVICE_IDLE;
 static char   el_url[200] = {0};  // 文件url
 static audio_element_info_t info = {0}; // 当前播放/录音的音频格式信息
-static int    audio_volume = 0;
+static int    audio_volume = 50;
 static bool   g_uac_active = false;
 static bool   audio_out_active = false;
 static bool   audio_in_active = false;
@@ -89,7 +89,7 @@ esp_err_t audio_service_init(void)
         return ESP_FAIL;
     }
     audio_hal_ctrl_codec(board_handle->audio_hal, AUDIO_HAL_CODEC_MODE_BOTH, AUDIO_HAL_CTRL_START);
-    power_hal_init();
+    tca9535_hal_init(I2C_NUM_0);
     power_hal_pa_enable(1);
     sd_hal_init();
 
@@ -287,7 +287,7 @@ static audio_element_handle_t create_element_by_role(audio_service_stream_type_t
                 return aac_decoder_init(&cfg);
             }
             case flac_dec: {
-                flac_decoder_cfg_t cfg = { .out_rb_size = 36*1024, .task_stack = 24*1024,.task_core = 0, .task_prio = 12, .stack_in_ext = true };
+                flac_decoder_cfg_t cfg = { .out_rb_size = 4*12*1024, .task_stack = 24*1024,.task_core = 0, .task_prio = 12, .stack_in_ext = true };
                 return flac_decoder_init(&cfg);
             }
             case wav_dec: {
@@ -311,7 +311,7 @@ static audio_element_handle_t create_element_by_role(audio_service_stream_type_t
             case file_str: {
                 fatfs_stream_cfg_t fatfs_cfg = FATFS_STREAM_CFG_DEFAULT();
                 fatfs_cfg.type = (is_output == true) ? AUDIO_STREAM_READER : AUDIO_STREAM_WRITER;
-                fatfs_cfg.buf_sz = 30 * 1024;
+                fatfs_cfg.buf_sz = 50 * 1024;
                 fatfs_cfg.ext_stack = true;
                 audio_element_handle_t el = fatfs_stream_init(&fatfs_cfg);
                 if (el) audio_element_set_uri(el, el_url);
@@ -603,8 +603,8 @@ static int vol_to_x(uint32_t vol) {
 static void uac_volume_cb(uint32_t vol, void *arg)
 {
     int vol_x = vol_to_x(vol);
-    set_audio_volume(vol_x);
-    ESP_LOGI(TAG, "Volume set to %d via UAC callback", vol_x);
+    set_audio_volume(vol);
+    ESP_LOGI(TAG, "Volume set to %ld via UAC callback", vol);
 }
 
 static void uac_mute_cb(uint32_t mute, void *arg)

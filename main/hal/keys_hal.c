@@ -5,8 +5,9 @@
 #include "freertos/queue.h"
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "system_event.h"   // 
-#include "ui_service.h"  // 默认往ui_service发送按键事件
+#include "system_event.h"   //
+#include "tca9535_hal.h"    // 读取IO扩展口的KEY_POWER键输入状态
+#include "ui_service.h"     // 默认往ui_service发送按键事件
 
 static const char *TAG = "KEY_HAL";
 
