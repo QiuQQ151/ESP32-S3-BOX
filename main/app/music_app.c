@@ -36,10 +36,12 @@ static struct {
 
 // ---------- 任务句柄 ----------
 static TaskHandle_t music_update_status_task_handle = NULL;
+static TaskHandle_t scan_task_handle = NULL;
 
 // ---------- 音乐文件定义 ----------
-#define MUSIC_ROOT_PATH "/sdcard/music"   // 音乐根目录
-#define MAX_TRACKS      500
+#define MUSIC_ROOT_PATH       "/sdcard/music"        // 音乐根目录
+#define CACHE_FILE_PATH       "/sdcard/music/.track_cache"  // 缓存文件
+#define MAX_TRACKS            500
 
 typedef struct {
     char name[128];     // 文件名（不含路径）
@@ -65,6 +67,11 @@ static void music_update_status_task(void *arg);
 static void music_update_time(void);
 static int  music_scan_directory(const char *root);
 static void scan_dir_recursive(const char *dir_path, int *count);
+static void music_scan_task(void *arg);
+
+// 缓存读写
+static bool load_cache(void);
+static bool save_cache(void);
 
 // 按钮操作
 static void music_play_pause(void);
@@ -124,12 +131,7 @@ static void music_on_create(ui_app_t *app)
     lv_obj_set_style_pad_all(track_area, 0, 0);
 
     s_music_ui.track_label = lv_label_create(track_area);
-    
-    // 测试：直接显示硬编码的中文，验证字体是否支持中文
-    // 如果这个能显示，说明字体支持中文，问题在编码转换
-    // 如果这个不能显示，说明字体本身不支持中文
-    lv_label_set_text(s_music_ui.track_label, "测试中文");
-    
+    lv_label_set_text(s_music_ui.track_label, "扫描中...");
     lv_obj_set_style_text_color(s_music_ui.track_label, lv_color_white(), 0);
     lv_obj_set_style_text_font(s_music_ui.track_label, &font_alipuhui20, 0);
     lv_obj_set_width(s_music_ui.track_label, 135);
@@ -194,24 +196,15 @@ static void music_on_create(ui_app_t *app)
     lv_obj_center(s_music_ui.play_icon);
     s_music_ui.playing = false;
 
-    // 扫描音乐并自动播放第一首
-    if (music_scan_directory(MUSIC_ROOT_PATH) > 0) {
-        // 延迟显示，先显示测试中文
-        vTaskDelay(pdMS_TO_TICKS(2000));
-        lv_label_set_text(s_music_ui.track_label, track_list[0].name);
-        lv_obj_set_style_text_font(s_music_ui.track_label, &font_alipuhui20, 0);
-    }
-
     volume = get_audio_volume();
-    if (track_count > 0) {
-        s_music_ui.playing = true;
-        lv_img_set_src(s_music_ui.play_icon, &icon_play_40);
-        music_handle_change_to_audio(AUDIO_CMD_CONNECT);
-    }
 
     // 创建时间更新任务
     xTaskCreate(music_update_status_task, "music_update_status", 4096, NULL, 5,
                 &music_update_status_task_handle);
+
+    // 启动后台扫描任务
+    xTaskCreate(music_scan_task, "music_scan", 4096, NULL, 2, &scan_task_handle);
+
     music_app_led_control(LED_MODE_MUSIC, 100);
     ESP_LOGI(TAG, "Music UI created");
 }
@@ -233,6 +226,11 @@ static void music_on_close(ui_app_t *app)
 static void music_on_destroy(ui_app_t *app)
 {
     ESP_LOGI(TAG, "music_on_destroy");
+    // 停止扫描任务
+    if (scan_task_handle) {
+        vTaskDelete(scan_task_handle);
+        scan_task_handle = NULL;
+    }
     if (music_update_status_task_handle) {
         vTaskDelete(music_update_status_task_handle);
         music_update_status_task_handle = NULL;
@@ -320,15 +318,6 @@ static bool music_handle_key_event(key_event_data_t *key)
     return false;
 }
 
-// ========== 状态更新任务 ==========
-static void music_update_status_task(void *arg)
-{
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
-        music_update_time();
-    }
-}
-
 static void music_update_time(void)
 {
     sntp_service_receive_data_t *sntp_payload = malloc(sizeof(sntp_service_receive_data_t));
@@ -394,6 +383,7 @@ static void music_next_track(void)
 static void music_refresh(void)
 {
     ESP_LOGI(TAG, "refresh, re-scanning music directory");
+    // 清除旧数据
     if (track_list) {
         free(track_list);
         track_list = NULL;
@@ -401,16 +391,19 @@ static void music_refresh(void)
     track_count = 0;
     current_track_index = 0;
 
-    if (music_scan_directory(MUSIC_ROOT_PATH) > 0) {
-        lv_label_set_text(s_music_ui.track_label, track_list[0].name);
-        lv_obj_set_style_text_font(s_music_ui.track_label, &font_alipuhui20, 0);
-        s_music_ui.playing = true;
-        lv_img_set_src(s_music_ui.play_icon, &icon_play_40);
-        music_handle_change_to_audio(AUDIO_CMD_CONNECT);
-    } else {
-        lv_label_set_text(s_music_ui.track_label, "无音乐");
+    // 显示扫描中
+    if (s_music_ui.track_label) {
+        lv_label_set_text(s_music_ui.track_label, "扫描中...");
         lv_obj_set_style_text_font(s_music_ui.track_label, &font_alipuhui20, 0);
     }
+
+    // 如果之前有扫描任务还在运行，先删除
+    if (scan_task_handle) {
+        vTaskDelete(scan_task_handle);
+        scan_task_handle = NULL;
+    }
+    // 重新启动扫描任务（注意：会同时更新缓存）
+    xTaskCreate(music_scan_task, "music_scan", 4096, NULL, 2, &scan_task_handle);
 }
 
 static void music_handle_change_to_audio(audio_service_cmd_t cmd)
@@ -491,7 +484,7 @@ static void music_app_led_control(led_mode_t mode, uint32_t arg) {
 }
 
 // ========== 递归扫描辅助函数 ==========
-static void scan_dir_recursive(const char *dir_path, int *count) 
+static void scan_dir_recursive(const char *dir_path, int *count)
 {
     DIR *dir = opendir(dir_path);
     if (!dir) return;
@@ -505,22 +498,25 @@ static void scan_dir_recursive(const char *dir_path, int *count)
         int written = snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, entry->d_name);
         if (written >= sizeof(full_path)) continue;
 
-        // 使用 stat 代替 d_type
+        // 优先使用 d_type（如果支持），否则回退到 stat
+#if defined(DT_DIR) && defined(DT_REG)
+        if (entry->d_type == DT_DIR) {
+            scan_dir_recursive(full_path, count);
+        } else if (entry->d_type == DT_REG) {
+#else
         struct stat st;
         if (stat(full_path, &st) != 0) continue;
-
         if (S_ISDIR(st.st_mode)) {
-            // 递归进入子目录
             scan_dir_recursive(full_path, count);
+            continue; // 目录已处理，跳过后续检查
         } else if (S_ISREG(st.st_mode)) {
+#endif
             // 检查是否是音乐文件
             const char *ext = strrchr(entry->d_name, '.');
-            if (!ext) continue;
-            if (strcasecmp(ext, ".mp3") == 0 ||
-                strcasecmp(ext, ".wav") == 0 ||
-                strcasecmp(ext, ".flac") == 0 ||
-                strcasecmp(ext, ".aac") == 0) {
-
+            if (ext && (strcasecmp(ext, ".mp3") == 0 ||
+                        strcasecmp(ext, ".wav") == 0 ||
+                        strcasecmp(ext, ".flac") == 0 ||
+                        strcasecmp(ext, ".aac") == 0)) {
                 strncpy(track_list[*count].name, entry->d_name, sizeof(track_list[*count].name) - 1);
                 track_list[*count].name[sizeof(track_list[*count].name) - 1] = '\0';
                 strncpy(track_list[*count].path, full_path, sizeof(track_list[*count].path) - 1);
@@ -553,4 +549,126 @@ static int music_scan_directory(const char *root)
     }
     track_count = count;
     return count;
+}
+
+// ========== 缓存读写 ==========
+static bool load_cache(void) {
+    FILE *fp = fopen(CACHE_FILE_PATH, "rb");
+    if (!fp) return false;
+
+    // 读取文件数量
+    int count = 0;
+    if (fread(&count, sizeof(int), 1, fp) != 1) {
+        fclose(fp);
+        return false;
+    }
+    if (count <= 0 || count > MAX_TRACKS) {
+        fclose(fp);
+        return false;
+    }
+
+    music_track_t *new_list = calloc(count, sizeof(music_track_t));
+    if (!new_list) {
+        fclose(fp);
+        return false;
+    }
+
+    // 逐个读取 track 结构
+    for (int i = 0; i < count; i++) {
+        if (fread(&new_list[i], sizeof(music_track_t), 1, fp) != 1) {
+            free(new_list);
+            fclose(fp);
+            return false;
+        }
+    }
+
+    fclose(fp);
+
+    // 替换全局列表
+    if (track_list) free(track_list);
+    track_list = new_list;
+    track_count = count;
+    current_track_index = 0;
+    return true;
+}
+
+static bool save_cache(void) {
+    if (track_count == 0 || !track_list) return false;
+
+    FILE *fp = fopen(CACHE_FILE_PATH, "wb");
+    if (!fp) return false;
+
+    // 写入数量
+    fwrite(&track_count, sizeof(int), 1, fp);
+    // 写入所有 track 结构
+    fwrite(track_list, sizeof(music_track_t), track_count, fp);
+    fclose(fp);
+    return true;
+}
+
+// ========== 后台扫描任务 ==========
+static void music_scan_task(void *arg) {
+    ESP_LOGI(TAG, "Scan task started");
+
+    // 首先尝试读取缓存
+    bool scan_needed = true;
+    if (load_cache()) {
+        ESP_LOGI(TAG, "Cache loaded: %d tracks", track_count);
+        scan_needed = false;
+    }
+
+    if (scan_needed) {
+        // 执行全量扫描
+        int count = music_scan_directory(MUSIC_ROOT_PATH);
+        ESP_LOGI(TAG, "Scan done: %d tracks found", count);
+        if (count > 0) {
+            save_cache();  // 保存扫描结果
+        }
+    }
+
+    // 更新 UI：必须在 LVGL 任务上下文中操作
+    // 使用任务通知传递给 music_update_status_task，它会在 LVGL 线程中执行
+    if (music_update_status_task_handle) {
+        xTaskNotifyGive(music_update_status_task_handle);
+    }
+
+    // 如果还没有播放，自动播放第一首
+    if (track_count > 0 && !s_music_ui.playing) {
+        // 注意：这里直接修改播放状态和图标，但因为音乐控制函数本身也在 UI 线程（按键回调）中调用，
+        // 为了线程安全，我们通过在 LVGL 任务中异步设置。
+        // 简单起见，我们直接在这里设置 s_music_ui.playing 和图标，
+        // 因为这些变量只在 UI 线程读取，当前更新发生在扫描任务中，可能引起竞态条件。
+        // 更安全的做法是使用 LVGL 的 lv_async_call 或把这段逻辑放到 music_update_status_task 中处理。
+        // 我们选择在通知处理中统一处理（见 music_update_status_task 修改）。
+    }
+
+    // 清理任务自身
+    scan_task_handle = NULL;
+    vTaskDelete(NULL);
+}
+
+// 修改 music_update_status_task 以处理扫描完成通知
+static void music_update_status_task(void *arg) {
+    while (1) {
+        // 等待扫描完成通知（超时 1 秒也用于更新时间）
+        if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000))) {
+            // 扫描完成，更新 UI
+            if (track_count > 0 && s_music_ui.track_label) {
+                lv_label_set_text(s_music_ui.track_label, track_list[0].name);
+                lv_obj_set_style_text_font(s_music_ui.track_label, &font_alipuhui20, 0);
+
+                // 自动开始播放第一首
+                if (!s_music_ui.playing) {
+                    s_music_ui.playing = true;
+                    lv_img_set_src(s_music_ui.play_icon, &icon_play_40);
+                    music_handle_change_to_audio(AUDIO_CMD_CONNECT);
+                }
+            } else if (track_count == 0 && s_music_ui.track_label) {
+                lv_label_set_text(s_music_ui.track_label, "无音乐");
+                lv_obj_set_style_text_font(s_music_ui.track_label, &font_alipuhui20, 0);
+            }
+        }
+        // 每秒更新时间
+        music_update_time();
+    }
 }

@@ -52,12 +52,12 @@ typedef struct {
     uint8_t volume_level;
     uint8_t volume_brightness;
     uint8_t alert_brightness;
-    uint32_t solid_color;           // 纯色模式颜色 (0x00RRGGBB)
+    uint32_t solid_color;           // 纯色模式颜色 (0x00GGRRBB)
 } panel_state_t;
 
 static panel_state_t panel[LED_HAL_DEVICE_MAX] = {
-    { .mode = LED_MODE_SOLID, .brightness = 40, .solid_color = 0x00FF0000 },
-    { .mode = LED_MODE_BREATH, .brightness = 40, .solid_color = 0x0000FF00 },
+    { .mode = LED_MODE_SOLID, .brightness = 20, .solid_color = 0x0000FF00 },
+    { .mode = LED_MODE_BREATH, .brightness = 20, .solid_color = 0x00FF0000 },
 };
 
 static portMUX_TYPE mode_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -136,14 +136,20 @@ static void render_off_panel(led_hal_device_t dev)
     fill_strip(strips[dev], count, 0, 0, 0);
 }
 
-static void render_breath_panel(led_hal_device_t dev, uint8_t brightness)
+static void render_breath_panel(led_hal_device_t dev, uint8_t brightness, uint32_t solid_color)
 {
     uint32_t count = (dev == LED_HAL_DEVICE_FRONT) ? LED_FRONT_COUNT : LED_EXTENSION_COUNT;
     uint32_t elapsed = xTaskGetTickCount() * portTICK_PERIOD_MS;
     float phase = (float)(elapsed % BREATH_PERIOD_MS) / BREATH_PERIOD_MS;
     float b = (sinf(phase * 2.0f * M_PI) + 1.0f) / 2.0f;
-    uint8_t w = (uint8_t)(b * brightness);
-    fill_strip(strips[dev], count, w, w, w);
+    
+    // 先完成所有浮点运算，最后再转换为 uint8_t
+    float brightness_factor = brightness / 100.0f;
+    float r = ((solid_color >> 16) & 0xFF) * b * brightness_factor;
+    float g = ((solid_color >> 8) & 0xFF) * b * brightness_factor;
+    float bl = (solid_color & 0xFF) * b * brightness_factor;
+    
+    fill_strip(strips[dev], count, (uint8_t)r, (uint8_t)g, (uint8_t)bl);
 }
 
 static void render_bulb_panel(led_hal_device_t dev, uint8_t brightness)
@@ -284,7 +290,7 @@ static void led_hal_task(void *arg)
                     render_off_panel(d);
                     break;
                 case LED_MODE_BREATH:
-                    render_breath_panel(d, brightness);
+                    render_breath_panel(d, brightness, solid_color);
                     break;
                 case LED_MODE_BULB:
                     render_bulb_panel(d, brightness);
