@@ -9,6 +9,12 @@
 extern "C" {
 #endif
 
+// =================== 硬件配置（初始参数） ===================
+#define LED_FRONT_GPIO        7
+#define LED_EXTENSION_GPIO    8
+#define DEFAULT_FRONT_COUNT   30
+#define DEFAULT_EXTENSION_COUNT 10
+
 /** LED 设备枚举 */
 typedef enum {
     LED_HAL_DEVICE_FRONT     = 0,

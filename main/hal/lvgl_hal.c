@@ -335,7 +335,7 @@ uint32_t lvgl_hal_get_light_adc(void)
     }
 
     // 打印调试信息（注意：voltage 是 int 类型，用 %d）
-    ESP_LOGI("ADC", "GPIO5 Raw: %d, Voltage: %d mV", raw, voltage);
+    //ESP_LOGI("ADC", "GPIO5 Raw: %d, Voltage: %d mV", raw, voltage);
 
     return (uint32_t)voltage;
 }
