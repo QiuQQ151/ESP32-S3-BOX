@@ -150,7 +150,7 @@ static void desktop_on_open(ui_app_t *app)
     led_service_receive_data_t* led_payload = (led_service_receive_data_t*)malloc(sizeof(led_service_receive_data_t));
     if(led_payload){
         led_payload->device = LED_HAL_DEVICE_FRONT;
-        led_payload->mode = LED_MODE_OFF;
+        led_payload->mode = LED_MODE_MUSIC;
         led_payload->brightness = 100;
         led_payload->arg = 0;
         

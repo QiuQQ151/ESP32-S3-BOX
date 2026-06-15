@@ -224,6 +224,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
         s_wifi_state = WIFI_STATE_CONNECTED;
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+        esp_wifi_set_ps(WIFI_PS_NONE);   // 关闭所有省电模式
         xEventGroupSetBits(s_wifi_event_group, WIFI_GOT_IP_BIT);
     }
 }

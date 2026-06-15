@@ -222,8 +222,8 @@ static void render_alert_panel(led_hal_device_t dev, uint8_t brightness)
 static void led_service_render_task(void *arg)
 {
     TickType_t start_tick = xTaskGetTickCount();
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(30)); // 33Hz
+    while (1) { 
+        vTaskDelay(pdMS_TO_TICKS(33)); // 30Hz
         float time_sec = (float)((xTaskGetTickCount() - start_tick) * portTICK_PERIOD_MS) / 1000.0f;
 
         // 对每一个led面板进行渲染
@@ -387,7 +387,7 @@ esp_err_t led_service_init(void)
     } 
 
     // 创建渲染任务
-    if (xTaskCreate(led_service_render_task, "led_service_render_task", 4096, NULL, 12, &led_render_task_handle) != pdPASS) {
+    if (xTaskCreate(led_service_render_task, "led_service_render_task", 4096, NULL, 3, &led_render_task_handle) != pdPASS) {
         ESP_LOGE(TAG, "led_service_render_task create fail");
         return ESP_FAIL;
     }
@@ -401,7 +401,7 @@ esp_err_t led_service_init(void)
     }
 
     // 创建服务分发任务
-    if (xTaskCreate(led_service_task, "led_service_task", 4096, NULL, 12, &led_service_task_handle) != pdPASS) {
+    if (xTaskCreate(led_service_task, "led_service_task", 4096, NULL, 3, &led_service_task_handle) != pdPASS) {
         ESP_LOGE(TAG, "led_service_task create fail");
         vTaskDelete(led_render_task_handle);
         vQueueDelete(led_service_request_queue);

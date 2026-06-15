@@ -32,7 +32,7 @@ typedef struct {
     int hour;
     int min;
     int sec;
-    char current_time[20]; // 当前时间字符串（格式：HH:MM:SS）(24h)
+    char current_time[20]; // 当前时间字符串（格式：HH:MM）(24h)
     sntp_service_state_t service_stata;    // 服务回复
 } sntp_service_send_data_t;
 

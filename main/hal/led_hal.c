@@ -27,7 +27,7 @@ esp_err_t led_hal_init(led_hal_device_t dev, uint8_t gpio, uint16_t max_leds)
         .clk_src           = RMT_CLK_SRC_DEFAULT,
         .resolution_hz     = 10 * 1000 * 1000,
         .mem_block_symbols = 64,
-        .flags.with_dma    = true,
+        .flags.with_dma    = false,
     };
 
     // 扩展板使用较小的 memory block 且不用 DMA

@@ -250,14 +250,15 @@ static void radio_on_create(ui_app_t *app)
     volume = 50;
     radio_handle_change_to_audio(AUDIO_CMD_CONNECT);// 首次连接
        // 启动状态更新任务
-    xTaskCreate(radio_update_status_task, "radio_update_status", 4096, NULL, 5,
+    xTaskCreate(radio_update_status_task, "radio_update_status", 4096, NULL, 3,
                 &radio_update_status_task_handle);
-    radio_app_led_control(LED_MODE_MUSIC, 100);
+    radio_app_led_control(LED_MODE_OFF, 100);
     ESP_LOGI(TAG, "Radio UI created");
 }
 
 static void radio_on_open(ui_app_t *app)
 {
+    radio_update_time();
     // 恢复显示当前电台
     if (s_radio_ui.channel_label && station_count > 0) {
         lv_label_set_text(s_radio_ui.channel_label, stations[selected_station_index].name);
@@ -336,7 +337,7 @@ static bool radio_handle_key_event(key_event_data_t *key)
                 evt->data_len = sizeof(ui_service_receive_data_t);
                 xQueueSend(get_ui_service_queue(), &evt, 0);
                 ESP_LOGI(TAG, "send ui_event to ui_service_queue");
-                radio_app_led_control(LED_MODE_BREATH, 100);
+                radio_app_led_control(LED_MODE_OFF, 100);
                 return true;
             }
             default: return true;
@@ -355,8 +356,8 @@ static bool radio_handle_key_event(key_event_data_t *key)
 static void radio_update_status_task(void *arg)
 {
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
-        radio_update_time();
+        vTaskDelay(pdMS_TO_TICKS(60000));  // 60s刷新一次时间
+        //radio_update_time();   // 会引起播放卡顿
     }
 }
 
@@ -389,13 +390,15 @@ static void radio_play_pause(void)
         lv_img_set_src(s_radio_ui.play_icon, &icon_stop_40);
         s_radio_ui.playing = false;
         radio_handle_change_to_audio(AUDIO_CMD_PAUSE);
+        radio_app_led_control(LED_MODE_OFF, 0);
     } else {
         ESP_LOGI(TAG, "play");
         lv_img_set_src(s_radio_ui.play_icon, &icon_play_40);
         s_radio_ui.playing = true;
         radio_handle_change_to_audio(AUDIO_CMD_PLAY);
+        radio_app_led_control(LED_MODE_MUSIC, 0);
     }
-    radio_app_led_control(LED_MODE_ALERT, 0);
+    
 }
 
 static void radio_prev_channel(void)

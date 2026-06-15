@@ -62,7 +62,7 @@ esp_err_t ui_service_init(void)
     ESP_ERROR_CHECK(esp_timer_start_periodic(lvgl_tick_timer, 5000));
 
     // 3. 创建 UI 请求队列
-    ui_service_request_queue = xQueueCreate(16, sizeof(void *));
+    ui_service_request_queue = xQueueCreate(30, sizeof(void *));
     if (!ui_service_request_queue) {
         ESP_LOGE(TAG, "Failed to create request queue");
         return ESP_ERR_NO_MEM;
@@ -75,7 +75,7 @@ esp_err_t ui_service_init(void)
     soundcard_app_register();
 
     // 5. 创建 UI 服务任务
-    BaseType_t ret = xTaskCreate(ui_service_task, "ui_service_task", 20*1024, NULL, 12, NULL); //4
+    BaseType_t ret = xTaskCreate(ui_service_task, "ui_service_task", 20*1024, NULL, 5, NULL); //4
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create UI task");
         return ESP_ERR_NO_MEM;

@@ -32,13 +32,13 @@ esp_err_t sntp_service_init(void)
 {
     ESP_LOGI(TAG, "Initializing SNTP");
     // 创建外部请求队列
-    sntp_service_request_queue = xQueueCreate(8, sizeof(event_data_t*));
+    sntp_service_request_queue = xQueueCreate(30, sizeof(event_data_t*));
     if (! sntp_service_request_queue) {
         ESP_LOGE(TAG, "Failed to create request queue");
         return ESP_ERR_NO_MEM;
     }
     // 启动任务
-    xTaskCreate(sntp_service_task, "sntp_service_task", 4096, NULL, 5, NULL);   // 4
+    xTaskCreate(sntp_service_task, "sntp_service_task", 4096, NULL, 2, NULL);   // 4
     return ESP_OK;
 }
 
@@ -175,7 +175,7 @@ void handle_get_time(sntp_service_receive_data_t *payload)
     sntp_time.hour = timeinfo.tm_hour;
     sntp_time.min = timeinfo.tm_min;
     sntp_time.sec = timeinfo.tm_sec;
-    strftime(sntp_time.current_time, sizeof(sntp_time.current_time), "%H:%M:%S", &timeinfo);
+    strftime(sntp_time.current_time, sizeof(sntp_time.current_time), "%H:%M", &timeinfo);
     //ESP_LOGI(TAG,"get time: %s", sntp_time.current_time);
 }
 
