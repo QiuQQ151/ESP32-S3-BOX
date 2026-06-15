@@ -9,6 +9,10 @@
 #include "esp_lcd_gc9a01.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_adc/adc_oneshot.h"
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
+#include "hal/adc_types.h"      // ADC 枚举类型（避免隐式声明）
 
 #include "driver/ledc.h"
 #include "driver/gpio.h"
@@ -17,8 +21,6 @@
 #include "lvgl.h"
 #include "hal/it7259_hal.h"  // IT7259 触摸驱动
 #include "hal/lvgl_hal.h"
-
-
 
 
 // Using SPI2 in the LCD
@@ -45,6 +47,11 @@
 #define I2C_SCL   2
 #define I2C_NUM   I2C_NUM_0
 #define I2C_CLK_HZ  (400000)
+
+// 环境光检测
+static adc_oneshot_unit_handle_t adc1_handle;
+static adc_cali_handle_t adc_cali_handle;
+static bool do_calibration = false;
 
 // handle
 static esp_lcd_touch_handle_t touch_handle = NULL;
@@ -132,13 +139,62 @@ static void i2c_scan_simple(void) {
     }
 }
 
+static void lvgl_hal_brightness_init(void){
+    //------------- ADC1 初始化 -------------
+    adc_oneshot_unit_init_cfg_t init_cfg = {
+        .unit_id = ADC_UNIT_1,
+    };
+    ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_cfg, &adc1_handle));
+
+    //------------- ADC 通道配置（GPIO5 = ADC1_CHANNEL_4）-------------
+    adc_oneshot_chan_cfg_t chan_cfg = {
+        .bitwidth = ADC_BITWIDTH_12,       // 12位精度
+        .atten = ADC_ATTEN_DB_12,          // 0 ~ 3.3V
+    };
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, ADC_CHANNEL_4, &chan_cfg));
+
+    //------------- 校准初始化 -------------
+    adc_cali_curve_fitting_config_t cali_config = {
+        .unit_id = ADC_UNIT_1,
+        .atten = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_12,
+    };
+    esp_err_t ret = adc_cali_create_scheme_curve_fitting(&cali_config, &adc_cali_handle);
+    if (ret == ESP_OK) {
+        do_calibration = true;
+        ESP_LOGI("ADC", "Calibration enabled");
+    } else {
+        do_calibration = false;
+        ESP_LOGW("ADC", "Calibration failed, using raw conversion");
+    }
+
+    // 亮度输出
+    ledc_timer_config_t ledc_timer = {
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .timer_num = LEDC_TIMER_0,
+        .duty_resolution = LEDC_TIMER_13_BIT, // Set duty resolution to 13 bits,
+        .freq_hz = 5000,                      // Frequency in Hertz. Set frequency at 5 kHz
+        .clk_cfg = LEDC_AUTO_CLK};
+    ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
+
+    // Prepare and then apply the LEDC PWM channel configuration
+    ledc_channel_config_t ledc_channel = {
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .channel = LEDC_CHANNEL_0,
+        .timer_sel = LEDC_TIMER_0,
+        .intr_type = LEDC_INTR_DISABLE,
+        .gpio_num = PIN_NUM_BK_LIGHT,
+        .duty = 0, // Set duty
+        .hpoint = 0};
+    ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
+}
 lv_disp_t* lvgl_hal_init(void)
 {
 
     static lv_disp_draw_buf_t disp_buf;
     static lv_disp_drv_t disp_drv;
 
-    // =========================== 初始化液晶屏背光 ====================================
+    // // =========================== 初始化液晶屏背光 ====================================
     lvgl_hal_brightness_init();
     lvgl_hal_set_brightness(20);
 
@@ -251,27 +307,7 @@ lv_disp_t* lvgl_hal_init(void)
 }
 
 
-void lvgl_hal_brightness_init(void){
-    // Prepare and then apply the LEDC PWM timer configuration
-    ledc_timer_config_t ledc_timer = {
-        .speed_mode = LEDC_LOW_SPEED_MODE,
-        .timer_num = LEDC_TIMER_0,
-        .duty_resolution = LEDC_TIMER_13_BIT, // Set duty resolution to 13 bits,
-        .freq_hz = 5000,                      // Frequency in Hertz. Set frequency at 5 kHz
-        .clk_cfg = LEDC_AUTO_CLK};
-    ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
 
-    // Prepare and then apply the LEDC PWM channel configuration
-    ledc_channel_config_t ledc_channel = {
-        .speed_mode = LEDC_LOW_SPEED_MODE,
-        .channel = LEDC_CHANNEL_0,
-        .timer_sel = LEDC_TIMER_0,
-        .intr_type = LEDC_INTR_DISABLE,
-        .gpio_num = PIN_NUM_BK_LIGHT,
-        .duty = 0, // Set duty
-        .hpoint = 0};
-    ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
-}
 
 // 0～100
 void lvgl_hal_set_brightness(uint8_t percent){
@@ -280,4 +316,26 @@ void lvgl_hal_set_brightness(uint8_t percent){
         percent = 99;
     ESP_ERROR_CHECK(ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 8191 * (100 - percent)/100)); // 设置占空比
     ESP_ERROR_CHECK(ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0));                // 更新背光
+}
+
+uint32_t lvgl_hal_get_light_adc(void)
+{
+    int raw = 0;
+    int voltage = 0;
+
+    // 读取原始值
+    ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, ADC_CHANNEL_4, &raw));
+
+    // 转换为电压
+    if (do_calibration) {
+        ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc_cali_handle, raw, &voltage));
+    } else {
+        // 无校准数据时，手动换算
+        voltage = (raw * 3300) / 4096;
+    }
+
+    // 打印调试信息（注意：voltage 是 int 类型，用 %d）
+    ESP_LOGI("ADC", "GPIO5 Raw: %d, Voltage: %d mV", raw, voltage);
+
+    return (uint32_t)voltage;
 }

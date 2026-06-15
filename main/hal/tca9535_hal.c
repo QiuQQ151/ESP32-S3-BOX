@@ -57,7 +57,7 @@ esp_err_t tca9535_hal_init(i2c_port_t i2c_num) {
     _i2c_port = i2c_num;
     esp_err_t err;
 
-    // 系统上电维持
+    // 初始化系统上电引脚
     ESP_LOGI(TAG, "Init sys power enable pin");
     gpio_config_t power_io_conf = {
         .pin_bit_mask = (1ULL << POWER_HAL_SYS_POWER_PIN),   // 选中 GPIO4
@@ -67,7 +67,14 @@ esp_err_t tca9535_hal_init(i2c_port_t i2c_num) {
         .intr_type = GPIO_INTR_DISABLE
     };
     gpio_config(&power_io_conf);
-    power_hal_enable_sys_power(1); 
+    power_hal_enable_sys_power(1);  // 系统上电维持
+
+    power_hal_ext_pcb_enable(1);
+    power_hal_led_enable(1);
+
+    power_hal_motor_enable(1);
+    vTaskDelay(2000 / portTICK_PERIOD_MS);
+    power_hal_motor_enable(0);
 
     ESP_LOGI(TAG, "TCA9535 initializing...");
     ESP_LOGI(TAG, "TCA9535 configuring pins...");
@@ -144,7 +151,7 @@ void power_hal_led_enable(uint8_t enable){
 }
 
 // 设置扩展PCB的使能
-void power_hal_ext_pcb_enable(uint8_t led_index, uint8_t enable){
+void power_hal_ext_pcb_enable(uint8_t enable){
    tca9535_pin_mode(POWER_HAL_EXT_PCB_PIN, IO_OUTPUT);
    tca9535_digital_write(POWER_HAL_EXT_PCB_PIN, enable);
 }

@@ -300,9 +300,9 @@ static audio_element_handle_t create_element_by_role(audio_service_stream_type_t
                 http_stream_cfg_t http_cfg = HTTP_STREAM_CFG_DEFAULT();
                 http_cfg.type = (is_output == true) ? AUDIO_STREAM_READER : AUDIO_STREAM_WRITER;
                 http_cfg.enable_playlist_parser = false;
-                http_cfg.out_rb_size = 10 * 1024;
+                http_cfg.out_rb_size = 50 * 1024;
                 http_cfg.task_stack = 10 * 1024;
-                http_cfg.request_size = 15 * 1024;
+                http_cfg.request_size = 50 * 1024;
                 http_cfg.stack_in_ext = true;
                 audio_element_handle_t el = http_stream_init(&http_cfg);
                 if (el) audio_element_set_uri(el, el_url);

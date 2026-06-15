@@ -8,6 +8,7 @@ set(SOURCES
     hal/tca9535_hal.c  # IO扩展 包含电源使能
     #hal/power_hal.c #电源使能
     hal/sd_hal.c #SD卡
+    hal/led_hal.c
 
     hal/it7259_hal.c  # LCD触摸
     hal/lvgl_hal.c  # LCD
@@ -24,7 +25,7 @@ set(SOURCES
     
     # App 层
     app/desktop_app.c
-    # app/radio_app.c
+    app/radio_app.c
     app/music_app.c
     app/soundcard_app.c
     

@@ -388,7 +388,7 @@ static void radio_play_pause(void)
         ESP_LOGI(TAG, "pause");
         lv_img_set_src(s_radio_ui.play_icon, &icon_stop_40);
         s_radio_ui.playing = false;
-        radio_handle_change_to_audio(AUDIO_CMD_STOP);
+        radio_handle_change_to_audio(AUDIO_CMD_PAUSE);
     } else {
         ESP_LOGI(TAG, "play");
         lv_img_set_src(s_radio_ui.play_icon, &icon_play_40);
@@ -426,14 +426,12 @@ static void radio_handle_change_to_audio(audio_service_cmd_t cmd){
         ESP_LOGE(TAG,"malloc audio_service_receive_data_t err");
     } else{
         audio_payload->cmd = cmd;
-        audio_payload->content_id = selected_station_index;
         strcpy(audio_payload->url, stations[selected_station_index].url);
         audio_payload->prv_type = http_str;
         audio_payload->midle_type = stations[selected_station_index].type;
         audio_payload->back_type = i2s_hal;
         audio_payload->volume = volume;
         audio_payload->start_after_connect = s_radio_ui.playing;
-        audio_payload->seek_position = 0;
 
         event_data_t *evt_data = malloc(sizeof(event_data_t));
         if(!evt_data){

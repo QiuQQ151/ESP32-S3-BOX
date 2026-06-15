@@ -1,58 +1,59 @@
+// led_service.c
+#include "led_service.h"
+#include "led_hal.h"
 #include <math.h>
-#include <stdint.h>
 #include <string.h>
-#include "esp_err.h"
-#include "led_strip.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 #include "system_event.h"
-#include "led_service.h"
 
-// =================== 硬件配置 ===================
-#define LED_FRONT_GPIO       7
-#define LED_EXTENSION_GPIO   8
-#define LED_FRONT_COUNT      30
-#define LED_EXTENSION_COUNT  10
+
+// =================== 硬件配置（初始参数） ===================
+#define LED_FRONT_GPIO        7
+#define LED_EXTENSION_GPIO    8
+#define DEFAULT_FRONT_COUNT   30
+#define DEFAULT_EXTENSION_COUNT 10
 
 // =================== 音乐模式参数 ===================
-#define TIME_SPEED_R        0.3f
-#define PERIOD_R            10.0f
-#define PHASE_R             0.0f
-#define TIME_SPEED_G        0.5f
-#define PERIOD_G            27.0f
-#define PHASE_G             2.0f
-#define TIME_SPEED_B        0.7f
-#define PERIOD_B            33.0f
-#define PHASE_B             4.0f
+#define TIME_SPEED_R          0.3f
+#define PERIOD_R              10.0f
+#define PHASE_R               0.0f
+#define TIME_SPEED_G          0.5f
+#define PERIOD_G              27.0f
+#define PHASE_G               2.0f
+#define TIME_SPEED_B          0.7f
+#define PERIOD_B              33.0f
+#define PHASE_B               4.0f
 
 // =================== 其他参数 ===================
-#define BREATH_PERIOD_MS    4000
-#define RUN_SPEED_MS        100
-#define VOLUME_DISPLAY_MS   2000
-#define ALERT_BLINK_MS      500
-#define ALERT_TIMES         3
+#define BREATH_PERIOD_MS      4000
+#define RUN_SPEED_MS          100
+#define VOLUME_DISPLAY_MS     2000
+#define ALERT_BLINK_MS        500
+#define ALERT_TIMES           3
 
-static const char *TAG = "led_hal";
+static const char *TAG = "led_service";
 
-static led_strip_handle_t strips[LED_HAL_DEVICE_MAX] = {NULL, NULL};
-static bool initialized = false;
 static QueueHandle_t led_service_request_queue = NULL;
-static TaskHandle_t led_service_task_handle = NULL;
-static TaskHandle_t led_hal_task_handle = NULL;
+static TaskHandle_t   led_render_task_handle   = NULL;  // 原 led_hal_task_handle
+static TaskHandle_t   led_service_task_handle  = NULL;
+static bool           initialized              = false;
 
+/* ---------- 面板状态 ---------- */
 typedef struct {
     led_mode_t mode;
-    uint8_t brightness;
+    uint8_t    brightness;
     led_mode_t prev_mode;
-    uint32_t clock_total_sec;
+    uint32_t   clock_total_sec;
     TickType_t clock_start_tick;
     TickType_t volume_end_tick;
     TickType_t alert_end_tick;
-    uint8_t volume_level;
-    uint8_t volume_brightness;
-    uint8_t alert_brightness;
-    uint32_t solid_color;           // 纯色模式颜色 (0x00GGRRBB)
+    uint8_t    volume_level;
+    uint8_t    volume_brightness;
+    uint8_t    alert_brightness;
+    uint32_t   solid_color;          // 0x00GGRRBB
 } panel_state_t;
 
 static panel_state_t panel[LED_HAL_DEVICE_MAX] = {
@@ -62,45 +63,47 @@ static panel_state_t panel[LED_HAL_DEVICE_MAX] = {
 
 static portMUX_TYPE mode_mux = portMUX_INITIALIZER_UNLOCKED;
 
-#define SAFE_EXT_LOOP(code) \
-    if (strips[LED_HAL_DEVICE_EXTENSION] != NULL) { \
-        for (int i = 0; i < LED_EXTENSION_COUNT; i++) { \
-            code; \
-        } \
-        led_strip_refresh(strips[LED_HAL_DEVICE_EXTENSION]); \
-    }
+/* ---------- 简化扩展板批量操作宏（只刷新，不单独设置） ---------- */
+#define SAFE_EXT_CLEAR() do { \
+    if (led_hal_is_ready(LED_HAL_DEVICE_EXTENSION)) { \
+        uint16_t cnt = led_hal_get_count(LED_HAL_DEVICE_EXTENSION); \
+        for (uint16_t i = 0; i < cnt; i++) \
+            led_hal_set_pixel(LED_HAL_DEVICE_EXTENSION, i, 0, 0, 0); \
+        led_hal_refresh(LED_HAL_DEVICE_EXTENSION); \
+    } \
+} while(0)
 
-// =================== 辅助函数 ===================
-static void fill_strip(led_strip_handle_t strip, uint32_t count,
-                       uint8_t r, uint8_t g, uint8_t b)
+/* ---------- 辅助函数 ---------- */
+static void fill_strip_dev(led_hal_device_t dev, uint32_t count,
+                           uint8_t r, uint8_t g, uint8_t b)
 {
-    if (!strip || count == 0) return;
+    if (!led_hal_is_ready(dev) || count == 0) return;
     for (int i = 0; i < count; i++) {
-        led_strip_set_pixel(strip, i, g, r, b);
+        led_hal_set_pixel(dev, i, r, g, b);
     }
-    led_strip_refresh(strip);
+    led_hal_refresh(dev);
 }
 
 static void fill_front_count_with_brightness(uint8_t r, uint8_t g, uint8_t b,
                                              uint32_t count, uint8_t brightness)
 {
-    for (int i = 0; i < LED_FRONT_COUNT; i++) {
+    if (!led_hal_is_ready(LED_HAL_DEVICE_FRONT)) return;
+    uint16_t front_count = led_hal_get_count(LED_HAL_DEVICE_FRONT);
+    for (int i = 0; i < front_count; i++) {
         if (i < count) {
-            led_strip_set_pixel(strips[LED_HAL_DEVICE_FRONT], i,
-                                (g * brightness) / 255,
-                                (r * brightness) / 255,
-                                (b * brightness) / 255);
+            led_hal_set_pixel(LED_HAL_DEVICE_FRONT, i,
+                              (uint8_t)((r * brightness) / 255),
+                              (uint8_t)((g * brightness) / 255),
+                              (uint8_t)((b * brightness) / 255));
         } else {
-            led_strip_set_pixel(strips[LED_HAL_DEVICE_FRONT], i, 0, 0, 0);
+            led_hal_set_pixel(LED_HAL_DEVICE_FRONT, i, 0, 0, 0);
         }
     }
-    led_strip_refresh(strips[LED_HAL_DEVICE_FRONT]);
-    SAFE_EXT_LOOP(
-        led_strip_set_pixel(strips[LED_HAL_DEVICE_EXTENSION], i, 0, 0, 0);
-    );
+    led_hal_refresh(LED_HAL_DEVICE_FRONT);
+    SAFE_EXT_CLEAR();
 }
 
-// =================== 音乐模式 ===================
+/* ---------- 音乐模式计算 ---------- */
 static inline float sin01(float x) {
     return sinf(x) * 0.5f + 0.5f;
 }
@@ -117,45 +120,45 @@ static void calc_color(float time_sec, int index, float brightness,
     *b = (uint8_t)(val_b * brightness);
 }
 
-static void render_music(led_strip_handle_t strip, uint32_t count,
-                         float time_sec, uint8_t brightness)
+static void render_music(led_hal_device_t dev, float time_sec, uint8_t brightness)
 {
-    if (!strip || count == 0) return;
+    if (!led_hal_is_ready(dev)) return;
+    uint16_t count = led_hal_get_count(dev);
     for (int i = 0; i < count; i++) {
         uint8_t r, g, b;
         calc_color(time_sec, i, brightness, &r, &g, &b);
-        led_strip_set_pixel(strip, i, g, r, b);
+        led_hal_set_pixel(dev, i, r, g, b);
     }
-    led_strip_refresh(strip);
+    led_hal_refresh(dev);
 }
 
-// =================== 各模式渲染 ===================
+/* ---------- 各模式渲染 ---------- */
 static void render_off_panel(led_hal_device_t dev)
 {
-    uint32_t count = (dev == LED_HAL_DEVICE_FRONT) ? LED_FRONT_COUNT : LED_EXTENSION_COUNT;
-    fill_strip(strips[dev], count, 0, 0, 0);
+    uint16_t count = led_hal_get_count(dev);
+    fill_strip_dev(dev, count, 0, 0, 0);
 }
 
 static void render_breath_panel(led_hal_device_t dev, uint8_t brightness, uint32_t solid_color)
 {
-    uint32_t count = (dev == LED_HAL_DEVICE_FRONT) ? LED_FRONT_COUNT : LED_EXTENSION_COUNT;
+    if (!led_hal_is_ready(dev)) return;
+    uint16_t count = led_hal_get_count(dev);
     uint32_t elapsed = xTaskGetTickCount() * portTICK_PERIOD_MS;
     float phase = (float)(elapsed % BREATH_PERIOD_MS) / BREATH_PERIOD_MS;
     float b = (sinf(phase * 2.0f * M_PI) + 1.0f) / 2.0f;
-    
-    // 先完成所有浮点运算，最后再转换为 uint8_t
+
     float brightness_factor = brightness / 100.0f;
     float r = ((solid_color >> 16) & 0xFF) * b * brightness_factor;
-    float g = ((solid_color >> 8) & 0xFF) * b * brightness_factor;
-    float bl = (solid_color & 0xFF) * b * brightness_factor;
-    
-    fill_strip(strips[dev], count, (uint8_t)r, (uint8_t)g, (uint8_t)bl);
+    float g = ((solid_color >> 8) & 0xFF)  * b * brightness_factor;
+    float bl = (solid_color & 0xFF)        * b * brightness_factor;
+
+    fill_strip_dev(dev, count, (uint8_t)r, (uint8_t)g, (uint8_t)bl);
 }
 
 static void render_bulb_panel(led_hal_device_t dev, uint8_t brightness)
 {
-    uint32_t count = (dev == LED_HAL_DEVICE_FRONT) ? LED_FRONT_COUNT : LED_EXTENSION_COUNT;
-    fill_strip(strips[dev], count, brightness, brightness, brightness);
+    uint16_t count = led_hal_get_count(dev);
+    fill_strip_dev(dev, count, brightness, brightness, brightness);
 }
 
 static void render_clock_panel(void)
@@ -174,7 +177,8 @@ static void render_clock_panel(void)
     }
 
     float progress = (float)elapsed_sec / p->clock_total_sec;
-    uint32_t lit = (uint32_t)(progress * LED_FRONT_COUNT);
+    uint16_t front_count = led_hal_get_count(LED_HAL_DEVICE_FRONT);
+    uint32_t lit = (uint32_t)(progress * front_count);
     fill_front_count_with_brightness(255, 200, 100, lit, p->brightness);
 }
 
@@ -185,14 +189,15 @@ static void render_run_panel(led_hal_device_t dev, uint8_t brightness)
     TickType_t now = xTaskGetTickCount();
     if (now - last_tick >= pdMS_TO_TICKS(RUN_SPEED_MS)) {
         last_tick = now;
-        pos = (pos + 1) % LED_FRONT_COUNT;
+        pos = (pos + 1) % led_hal_get_count(dev);
     }
-    uint32_t count = (dev == LED_HAL_DEVICE_FRONT) ? LED_FRONT_COUNT : LED_EXTENSION_COUNT;
+    if (!led_hal_is_ready(dev)) return;
+    uint16_t count = led_hal_get_count(dev);
     for (int i = 0; i < count; i++) {
         uint8_t v = (i == pos) ? brightness : 0;
-        led_strip_set_pixel(strips[dev], i, v, v, v);
+        led_hal_set_pixel(dev, i, v, v, v);
     }
-    led_strip_refresh(strips[dev]);
+    led_hal_refresh(dev);
 }
 
 static void render_volume_panel(void)
@@ -205,21 +210,20 @@ static void render_volume_panel(void)
         taskEXIT_CRITICAL(&mode_mux);
         return;
     }
-    uint32_t count = (uint32_t)(p->volume_level * LED_FRONT_COUNT / 100.0f);
-    if (count > LED_FRONT_COUNT) count = LED_FRONT_COUNT;
-    for (int i = 0; i < LED_FRONT_COUNT; i++) {
+    uint16_t front_count = led_hal_get_count(LED_HAL_DEVICE_FRONT);
+    uint32_t count = (uint32_t)(p->volume_level * front_count / 100.0f);
+    if (count > front_count) count = front_count;
+    for (int i = 0; i < front_count; i++) {
         uint8_t r = 0, g = 0, b = 0;
         if (i < count) {
-            float ratio = (float)i / LED_FRONT_COUNT;
+            float ratio = (float)i / front_count;
             r = (uint8_t)(ratio * p->volume_brightness);
             g = (uint8_t)((1.0f - ratio) * p->volume_brightness);
         }
-        led_strip_set_pixel(strips[LED_HAL_DEVICE_FRONT], i, g, r, b);
+        led_hal_set_pixel(LED_HAL_DEVICE_FRONT, i, g, r, b);
     }
-    led_strip_refresh(strips[LED_HAL_DEVICE_FRONT]);
-    SAFE_EXT_LOOP(
-        led_strip_set_pixel(strips[LED_HAL_DEVICE_EXTENSION], i, 0, 0, 0);
-    );
+    led_hal_refresh(LED_HAL_DEVICE_FRONT);
+    SAFE_EXT_CLEAR();
 }
 
 static void render_alert_panel(void)
@@ -243,30 +247,28 @@ static void render_alert_panel(void)
     uint32_t phase_ms = (now * portTICK_PERIOD_MS) % (ALERT_BLINK_MS * 2);
     bool on = (phase_ms < ALERT_BLINK_MS);
     uint8_t r = on ? p->alert_brightness : 0;
-    fill_strip(strips[LED_HAL_DEVICE_FRONT], LED_FRONT_COUNT, 0, r, 0);
-    SAFE_EXT_LOOP(
-        led_strip_set_pixel(strips[LED_HAL_DEVICE_EXTENSION], i, 0, 0, 0);
-    );
+    fill_strip_dev(LED_HAL_DEVICE_FRONT, led_hal_get_count(LED_HAL_DEVICE_FRONT), 0, r, 0);
+    SAFE_EXT_CLEAR();
 }
 
 static void render_solid_panel(led_hal_device_t dev, uint8_t brightness, uint32_t color)
 {
-    uint32_t count = (dev == LED_HAL_DEVICE_FRONT) ? LED_FRONT_COUNT : LED_EXTENSION_COUNT;
+    if (!led_hal_is_ready(dev)) return;
+    uint16_t count = led_hal_get_count(dev);
     uint8_t r = (color >> 16) & 0xFF;
     uint8_t g = (color >> 8) & 0xFF;
     uint8_t b = color & 0xFF;
-
     for (int i = 0; i < count; i++) {
-        led_strip_set_pixel(strips[dev], i,
-                            (g * brightness) / 255,
-                            (r * brightness) / 255,
-                            (b * brightness) / 255);
+        led_hal_set_pixel(dev, i,
+                          (uint8_t)((g * brightness) / 255),
+                          (uint8_t)((r * brightness) / 255),
+                          (uint8_t)((b * brightness) / 255));
     }
-    led_strip_refresh(strips[dev]);
+    led_hal_refresh(dev);
 }
 
-// =================== 效果任务 ===================
-static void led_hal_task(void *arg)
+/* ---------- 统一渲染任务（原 led_hal_task） ---------- */
+static void led_render_task(void *arg)
 {
     TickType_t start_tick = xTaskGetTickCount();
     while (1) {
@@ -274,14 +276,14 @@ static void led_hal_task(void *arg)
         float time_sec = (float)((xTaskGetTickCount() - start_tick) * portTICK_PERIOD_MS) / 1000.0f;
 
         for (int d = 0; d < LED_HAL_DEVICE_MAX; d++) {
-            if (strips[d] == NULL) continue;
+            if (!led_hal_is_ready(d)) continue;
 
             led_mode_t mode;
             uint8_t brightness;
             uint32_t solid_color;
             taskENTER_CRITICAL(&mode_mux);
-            mode = panel[d].mode;
-            brightness = panel[d].brightness;
+            mode        = panel[d].mode;
+            brightness  = panel[d].brightness;
             solid_color = panel[d].solid_color;
             taskEXIT_CRITICAL(&mode_mux);
 
@@ -296,10 +298,7 @@ static void led_hal_task(void *arg)
                     render_bulb_panel(d, brightness);
                     break;
                 case LED_MODE_MUSIC:
-                    render_music(strips[d],
-                                 (d == LED_HAL_DEVICE_FRONT) ? LED_FRONT_COUNT : LED_EXTENSION_COUNT,
-                                 time_sec + ((d == LED_HAL_DEVICE_EXTENSION) ? 1.5f : 0.0f),
-                                 brightness);
+                    render_music(d, time_sec + ((d == LED_HAL_DEVICE_EXTENSION) ? 1.5f : 0.0f), brightness);
                     break;
                 case LED_MODE_RUN:
                     render_run_panel(d, brightness);
@@ -324,19 +323,9 @@ static void led_hal_task(void *arg)
     }
 }
 
-/**
- * @brief 统一设置面板模式（所有模式均通过此函数）
- * @param dev        面板选择
- * @param mode       模式
- * @param brightness 最大亮度 (1~255)
- * @param arg        附加参数：
- *                   - 时钟模式：倒计时秒数 (1~3600)
- *                   - 音量模式：音量值 (0~255)
- *                   - 纯色模式：颜色值 (0x00RRGGBB)
- *                   - 其他模式：忽略（传 0）
- */
+/* ---------- 模式设置函数---------- */
 static esp_err_t led_hal_set_panel_mode(led_hal_device_t dev, led_mode_t mode,
-                                 uint8_t brightness, uint32_t arg)
+                                        uint8_t brightness, uint32_t arg)
 {
     if (!initialized) return ESP_ERR_INVALID_STATE;
     if (dev >= LED_HAL_DEVICE_MAX) return ESP_ERR_INVALID_ARG;
@@ -383,7 +372,7 @@ static esp_err_t led_hal_set_panel_mode(led_hal_device_t dev, led_mode_t mode,
             break;
         }
         case LED_MODE_SOLID: {
-            p->solid_color = arg;   // 0x00RRGGBB
+            p->solid_color = arg;
             p->mode = mode;
             p->brightness = brightness;
             p->prev_mode = mode;
@@ -402,8 +391,9 @@ static esp_err_t led_hal_set_panel_mode(led_hal_device_t dev, led_mode_t mode,
     return ESP_OK;
 }
 
-/* ========== 主任务：分发请求 ========== */
-static void led_service_task(void *arg) {
+/* ---------- 服务任务：分发请求 ---------- */
+static void led_service_task(void *arg)
+{
     event_data_t *evt_data;
     while (1) {
         if (xQueueReceive(led_service_request_queue, &evt_data, portMAX_DELAY) == pdTRUE) {
@@ -411,7 +401,8 @@ static void led_service_task(void *arg) {
                 led_service_receive_data_t *payload = (led_service_receive_data_t *)evt_data->data;
                 if (payload) {
                     ESP_LOGI(TAG, "led service req: dev:%d mode:%d", payload->device, payload->mode);
-                    led_hal_set_panel_mode(payload->device, payload->mode, payload->brightness, payload->arg);
+                    (void)led_hal_set_panel_mode(payload->device, payload->mode,
+                                                 payload->brightness, payload->arg);
                 }
             } else {
                 ESP_LOGE(TAG, "led service unsupported event type %d", evt_data->event_type);
@@ -420,77 +411,59 @@ static void led_service_task(void *arg) {
                 free(evt_data->data);
                 evt_data->data = NULL;
             }
-            if (evt_data) {
-                free(evt_data);
-                evt_data = NULL;
-            }
+            free(evt_data);
         }
     }
 }
 
-// =================== 服务 API ===================
-esp_err_t led_service_init(void) {
+// ===============================对外接口================================================
+esp_err_t led_service_init(void)
+{
     if (initialized) return ESP_OK;
 
-    led_strip_config_t cfg_front = {
-        .strip_gpio_num = LED_FRONT_GPIO,
-        .max_leds       = LED_FRONT_COUNT,
-        .led_model      = LED_MODEL_WS2812,
-    };
-    led_strip_rmt_config_t rmt_front = {
-        .clk_src           = RMT_CLK_SRC_DEFAULT,
-        .resolution_hz     = 10 * 1000 * 1000,
-        .mem_block_symbols = 64,
-        .flags.with_dma    = true,
-    };
-    ESP_ERROR_CHECK(led_strip_new_rmt_device(&cfg_front, &rmt_front, &strips[LED_HAL_DEVICE_FRONT]));
-
-    led_strip_config_t cfg_ext = {
-        .strip_gpio_num = LED_EXTENSION_GPIO,
-        .max_leds       = LED_EXTENSION_COUNT,
-        .led_model      = LED_MODEL_WS2812,
-    };
-    led_strip_rmt_config_t rmt_ext = {
-        .clk_src           = RMT_CLK_SRC_DEFAULT,
-        .resolution_hz     = 10 * 1000 * 1000,
-        .mem_block_symbols = 48,
-        .flags.with_dma    = false,
-    };
-    esp_err_t ret = led_strip_new_rmt_device(&cfg_ext, &rmt_ext, &strips[LED_HAL_DEVICE_EXTENSION]);
+    // 初始化 HAL 层
+    esp_err_t ret = led_hal_init(LED_HAL_DEVICE_FRONT, LED_FRONT_GPIO, DEFAULT_FRONT_COUNT);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Ext LED init fail: %s", esp_err_to_name(ret));
-        strips[LED_HAL_DEVICE_EXTENSION] = NULL;
+        ESP_LOGE(TAG, "Front LED init failed, abort");
+        return ret;
+    }
+    
+    // 扩展板初始化失败不阻止整个服务启动
+    ret = led_hal_init(LED_HAL_DEVICE_EXTENSION, LED_EXTENSION_GPIO, DEFAULT_EXTENSION_COUNT);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Extension LED not available, will be skipped");
     }
 
-    if (strips[LED_HAL_DEVICE_FRONT]) led_strip_clear(strips[LED_HAL_DEVICE_FRONT]);
-    if (strips[LED_HAL_DEVICE_EXTENSION]) led_strip_clear(strips[LED_HAL_DEVICE_EXTENSION]);
-
-    if (xTaskCreate(led_hal_task, "led_hal_task", 4096, NULL, 12, &led_hal_task_handle) != pdPASS) {
-        ESP_LOGE(TAG, "led_hal_task create fail");
+    // 创建渲染任务
+    if (xTaskCreate(led_render_task, "led_render_task", 4096, NULL, 12,
+                    &led_render_task_handle) != pdPASS) {
+        ESP_LOGE(TAG, "led_render_task create fail");
         return ESP_FAIL;
     }
 
-    // 创建对外服务队列，用于接收其他服务的请求
-    led_service_request_queue = xQueueCreate(20, sizeof(event_data_t));
+    // 创建服务请求队列
+    led_service_request_queue = xQueueCreate(20, sizeof(event_data_t *));
     if (!led_service_request_queue) {
         ESP_LOGE(TAG, "led_service_request_queue create fail");
-        vTaskDelete(led_hal_task_handle);
+        vTaskDelete(led_render_task_handle);
         return ESP_FAIL;
     }
 
-    // 创建LED服务任务
-    if (xTaskCreate(led_service_task, "led_service_task", 4096, NULL, 12, &led_service_task_handle) != pdPASS) {
+    // 创建服务分发任务
+    if (xTaskCreate(led_service_task, "led_service_task", 4096, NULL, 12,
+                    &led_service_task_handle) != pdPASS) {
         ESP_LOGE(TAG, "led_service_task create fail");
-        vTaskDelete(led_hal_task_handle);
+        vTaskDelete(led_render_task_handle);
         vQueueDelete(led_service_request_queue);
         return ESP_FAIL;
     }
 
     initialized = true;
-    ESP_LOGI(TAG, "LED HAL ready");
+    ESP_LOGI(TAG, "LED service ready");
     return ESP_OK;
 }
 
-QueueHandle_t get_led_service_queue(void) {
+QueueHandle_t get_led_service_queue(void)
+{
     return led_service_request_queue;
 }

@@ -70,7 +70,7 @@ esp_err_t ui_service_init(void)
 
     // 4. 注册应用
     desktop_app_register();
-    // radio_app_register();
+    radio_app_register();
     music_app_register();
     soundcard_app_register();
 

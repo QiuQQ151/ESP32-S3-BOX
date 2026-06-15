@@ -3,16 +3,9 @@
 
 #include "esp_err.h"
 #include <stdint.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-typedef enum {
-    LED_HAL_DEVICE_FRONT     = 0,
-    LED_HAL_DEVICE_EXTENSION = 1,
-    LED_HAL_DEVICE_MAX       = 2,
-} led_hal_device_t;
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "led_hal.h"  
 
 typedef enum {
     LED_MODE_OFF = 0,
@@ -54,8 +47,5 @@ typedef struct {
 esp_err_t led_service_init(void);
 QueueHandle_t get_led_service_queue(void);
 
-#ifdef __cplusplus
-}
-#endif
 
 #endif /* LED_HAL_H */

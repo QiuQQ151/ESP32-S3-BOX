@@ -37,7 +37,9 @@ static const char *TAG = "app_main";
 static void test_task(void *arg)
 {
     while (1) {
-        vTaskDelay(10000 / portTICK_PERIOD_MS);
+        uint32_t light_dac = lvgl_hal_get_light_adc();
+        lvgl_hal_set_brightness( (uint8_t)(light_dac) );
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 }
 
