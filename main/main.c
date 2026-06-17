@@ -21,24 +21,14 @@
 #include "services/ui_service.h"
 #include "services/led_service.h"
 
-// ADF elements
-#include "audio_element.h"
-#include "i2s_stream.h"
-#include "raw_stream.h"          // 如果确实需要 raw_stream，用于接收USB数据
-#include "usb_device_uac.h"      // USB UAC 组件
-#include "esp_codec_dev.h"       // 编解码器设备（ES8311）
-#include "driver/i2s_std.h"
-#include "board.h"
-#include "audio_pipeline.h"
-
 static const char *TAG = "app_main";
 
 /* ---------- 测试任务 ---------- */
 static void test_task(void *arg)
 {
     while (1) {
-        uint32_t light_dac = lvgl_hal_get_light_adc();
-        lvgl_hal_set_brightness( (uint8_t)(light_dac) );
+        // uint32_t light_dac = lvgl_hal_get_light_adc();
+        // lvgl_hal_set_brightness( (uint8_t)(light_dac) );
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 }
@@ -75,6 +65,25 @@ void app_main(void)
         evt_data->data = wifi_payload;
         xQueueSend(get_wifi_service_queue(), &evt_data, 0);
     }
+
+    vTaskDelay(10000 / portTICK_PERIOD_MS);
+    // 播放音频
+    audio_service_receive_data_t* audio_payload = malloc(sizeof(audio_service_receive_data_t));
+    audio_payload->cmd = AUDIO_CMD_CONNECT;
+    strcpy(audio_payload->url, "http://lhttp.qingting.fm/live/4915/64k.mp3");
+    audio_payload->prv_type = http_str;
+    audio_payload->midle_type = mp3_dec;
+    audio_payload->back_type = i2s_hal;
+    audio_payload->volume = 50;
+    audio_payload->start_after_connect = true;
+
+    event_data_t *audio_evt_data = malloc(sizeof(event_data_t));
+    audio_evt_data->service_id = UI_SERVICE;
+    audio_evt_data->event_type = REQUEST;
+    audio_evt_data->reply_queue = NULL;
+    audio_evt_data->data = audio_payload;
+    audio_evt_data->data_len = sizeof(audio_service_receive_data_t);
+    xQueueSend(get_audio_service_queue(), &audio_evt_data, 0);
 
     xTaskCreate(test_task, "test_task", 4096, NULL, 2, NULL);
     vTaskDelete(NULL);
