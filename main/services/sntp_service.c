@@ -6,19 +6,20 @@
 #include "esp_sntp.h"
 #include "esp_err.h"
 #include "esp_log.h"
-
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 
 #include "system_config.h"
 #include "services/system_event.h"
 #include "services/wifi_service.h"
+#include "services/ui_service.h"
 #include "services/sntp_service.h"
 
 static const char *TAG = "sntp_service";
 
 static sntp_service_send_data_t sntp_time; // 记录的时间
 static void sntp_service_task(void *arg); // sntp服务任务
+static void sntp_service_send_task(void *arg); // sntp主动发送时间任务
 static TaskHandle_t sntp_service_check_wifi_task_handle = NULL; // 检查WiFi连接任务句柄
 static void sntp_service_check_wifi_task(void *arg); // 检查WiFi连接任务
 static void handle_get_time(sntp_service_receive_data_t *payload); 
@@ -32,13 +33,13 @@ esp_err_t sntp_service_init(void)
 {
     ESP_LOGI(TAG, "Initializing SNTP");
     // 创建外部请求队列
-    sntp_service_request_queue = xQueueCreate(30, sizeof(event_data_t*));
+    sntp_service_request_queue = xQueueCreate(QUEUE_SERVICE_SIZE, sizeof(event_data_t*));
     if (! sntp_service_request_queue) {
         ESP_LOGE(TAG, "Failed to create request queue");
         return ESP_ERR_NO_MEM;
     }
     // 启动任务
-    xTaskCreate(sntp_service_task, "sntp_service_task", 4096, NULL, 2, NULL);   // 4
+    xTaskCreatePinnedToCore(sntp_service_task, "sntp_service_task", 4096, NULL, TASK_PRIO_SNTP_SERVICE, NULL, TASK_CORE_SERVICE);   // 4
     return ESP_OK;
 }
 
@@ -53,7 +54,6 @@ void time_sync_notification_cb(struct timeval *tv)
 }
 
 // =======================================内部函数=======================================
-
 
 static void sntp_service_check_wifi_task(void *arg){    
     while (sntp_service_state == SNTP_SERVICE_ERR_WIFI) {
@@ -91,12 +91,14 @@ static void sntp_service_check_wifi_task(void *arg){
     esp_sntp_setservername(1, SECONDARY_SNTP_SERVER);
     // 设置SNTP操作模式
     esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
-    esp_sntp_set_sync_interval(60000); // 60s
+    esp_sntp_set_sync_interval(3600*1000); // 1h
     // 初始化SNTP服务
     esp_sntp_init();
     setenv("TZ", "CST-8", 1); 
     tzset();    // 生效时区配置
-    ESP_LOGI(TAG, "Initializing");    
+    ESP_LOGI(TAG, "Initializing");
+    xTaskCreatePinnedToCore(sntp_service_send_task, "sntp_service_send_task", 4096, NULL, TASK_PRIO_SNTP_SERVICE, NULL, TASK_CORE_SERVICE);   // 4
+    ESP_LOGI(TAG, "starting active send time task");
     vTaskDelete(NULL);
 }
 
@@ -104,7 +106,7 @@ static void sntp_service_check_wifi_task(void *arg){
 static void sntp_service_task(void *arg){    
 
     // 启动检查WiFi连接任务
-    xTaskCreate(sntp_service_check_wifi_task, "sntp_service_check_wifi_task", 4096, NULL, 2, &sntp_service_check_wifi_task_handle); // 
+    xTaskCreatePinnedToCore(sntp_service_check_wifi_task, "sntp_service_check_wifi_task", 4096, NULL, 2, &sntp_service_check_wifi_task_handle, 1); // 
 
     // 分发服务请求
     event_data_t *evt_data = NULL;
@@ -159,7 +161,16 @@ static void sntp_service_task(void *arg){
         }
     }
 } 
-    
+
+// 定期往ui服务发送时间
+static void sntp_service_send_task(void *arg){
+  
+    while(1){ 
+       vTaskDelay(1000 / portTICK_PERIOD_MS);
+       handle_get_time(NULL);
+       handle_reply(get_ui_service_queue());
+    }
+}
 void handle_get_time(sntp_service_receive_data_t *payload)
 {
     // 直接从系统获取当前时间(硬件时间)
@@ -175,7 +186,7 @@ void handle_get_time(sntp_service_receive_data_t *payload)
     sntp_time.hour = timeinfo.tm_hour;
     sntp_time.min = timeinfo.tm_min;
     sntp_time.sec = timeinfo.tm_sec;
-    strftime(sntp_time.current_time, sizeof(sntp_time.current_time), "%H:%M", &timeinfo);
+    strftime(sntp_time.current_time, sizeof(sntp_time.current_time), "%H:%M:%S", &timeinfo);
     //ESP_LOGI(TAG,"get time: %s", sntp_time.current_time);
 }
 

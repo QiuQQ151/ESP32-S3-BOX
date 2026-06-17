@@ -6,7 +6,6 @@ set(SOURCES
     # HAL - 核心驱动
     hal/wifi_hal.c  # wifi
     hal/tca9535_hal.c  # IO扩展 包含电源使能
-    #hal/power_hal.c #电源使能
     hal/sd_hal.c #SD卡
     hal/led_hal.c
 
@@ -27,11 +26,9 @@ set(SOURCES
     app/desktop_app.c
     app/radio_app.c
     app/music_app.c
-    app/soundcard_app.c
     
 
     # 附加文件
-    canon.pcm
     icon/font_alipuhui20.c # 字体
     icon/icon_clock.c
     icon/icon_deepseek.c
@@ -67,5 +64,4 @@ set(INCLUDE_DIRS
 
 idf_component_register(SRCS ${SOURCES}
                        INCLUDE_DIRS ${INCLUDE_DIRS}
-                       #EMBED_FILES "canon.pcm"
 )

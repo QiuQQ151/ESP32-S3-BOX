@@ -68,7 +68,7 @@ esp_err_t test_es7210(void)
 audio_hal_handle_t audio_board_codec_init(void)
 {
     // ES7210
-    audio_hal_codec_config_t es7210_cfg =AUDIO_ADC_DUAL_MIC_CONFIG();
+    audio_hal_codec_config_t es7210_cfg = AUDIO_ADC_DUAL_MIC_CONFIG();
     audio_hal_handle_t es7210_hal = audio_hal_init(&es7210_cfg, &AUDIO_CODEC_ES7210_DEFAULT_HANDLE); 
     audio_hal_ctrl_codec(es7210_hal, AUDIO_HAL_CODEC_MODE_ENCODE, AUDIO_HAL_CTRL_START);
     es7210_adc_set_gain(ES7210_INPUT_MIC1 | ES7210_INPUT_MIC2, GAIN_30DB); // 设置增益为 12dB

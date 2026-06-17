@@ -19,7 +19,6 @@
 #include "desktop_app.h"
 #include "radio_app.h"
 #include "music_app.h"
-#include "soundcard_app.h"
 
 static const char *TAG = "ui_service";
 
@@ -53,29 +52,28 @@ esp_err_t ui_service_init(void)
     lvgl_hal_init();
     key_hal_init();
     
-    // 2. 创建 LVGL 心跳定时器（每 5ms）
+    // 2. 创建 LVGL 心跳定时器（每 20ms）
     const esp_timer_create_args_t tick_timer_args = {
         .callback = &lvgl_tick_callback,
         .name = "lvgl_tick"
     };
     ESP_ERROR_CHECK(esp_timer_create(&tick_timer_args, &lvgl_tick_timer));
-    ESP_ERROR_CHECK(esp_timer_start_periodic(lvgl_tick_timer, 5000));
+    ESP_ERROR_CHECK(esp_timer_start_periodic(lvgl_tick_timer, 20000));
 
     // 3. 创建 UI 请求队列
-    ui_service_request_queue = xQueueCreate(30, sizeof(void *));
+    ui_service_request_queue = xQueueCreate(QUEUE_SERVICE_SIZE, sizeof(void *));
     if (!ui_service_request_queue) {
         ESP_LOGE(TAG, "Failed to create request queue");
         return ESP_ERR_NO_MEM;
     }
 
-    // 4. 注册应用
+    // 4. 注册应用   
     desktop_app_register();
     radio_app_register();
     music_app_register();
-    soundcard_app_register();
 
     // 5. 创建 UI 服务任务
-    BaseType_t ret = xTaskCreate(ui_service_task, "ui_service_task", 20*1024, NULL, 5, NULL); //4
+    BaseType_t ret = xTaskCreatePinnedToCore(ui_service_task, "ui_service_task", 8*1024, NULL, TASK_PRIO_UI_SERVICE, NULL, TASK_CORE_SERVICE); //4
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create UI task");
         return ESP_ERR_NO_MEM;
@@ -125,18 +123,26 @@ void ui_service_register_app(ui_app_t *app)
 
 void ui_service_open_app(const char *name)
 {
+    // 确定目标app有效
     ui_app_t *app = find_app(name);
     if (!app) {
         ESP_LOGE(TAG, "App not found: %s", name);
         return;
     }
-
     if (current_app == app) {
         ESP_LOGI(TAG, "App '%s' already in foreground", name);
         return;
     }
 
-    // 1. 准备目标应用屏幕（若未创建则调用 on_create）
+    // 通知旧应用清理其它资源
+    ui_app_t *old_app = current_app;
+    if (old_app) {
+        if (old_app->on_close) {
+            old_app->on_close(old_app);
+        }
+    }
+
+    // 准备目标应用屏幕（只创建显示资源）
     if (!app->screen) {
         if (app->on_create) {
             app->on_create(app);
@@ -147,34 +153,33 @@ void ui_service_open_app(const char *name)
         }
     }
 
-    // 2. 通知目标应用即将打开（在屏幕切换之前，以便应用准备数据）
+    // 切换屏幕到目标应用
+    lv_scr_load(app->screen);
+
+    // 通知目标应用创建其它资源
     if (app->on_open) {
         app->on_open(app);
     }
 
-    // 3. 先切换屏幕（直接加载，不带动画，避免引用旧屏幕）
-    lv_scr_load(app->screen);
-
-    // 4. 更新最后启动的应用记录（桌面不计入）
+    // 更新最后启动的应用记录（桌面不计入）
     if (strcmp(name, "desktop_app") != 0) {
         free(last_launched_app);
         last_launched_app = strdup(name);
         ESP_LOGI(TAG, "Last launched app updated: %s", name);
     }
 
-    // 5. 关闭并销毁旧应用（此时旧屏幕已不是活动屏幕，可安全删除）
-    ui_app_t *old_app = current_app;
+    // 销毁旧应用显示数据
     if (old_app) {
-        if (old_app->on_close) {
-            old_app->on_close(old_app);
-        }
         if (old_app->on_destroy) {
             old_app->on_destroy(old_app);
         }
-        old_app->screen = NULL;   // 强制置空，避免应用遗忘
+        if (old_app->screen) {          // 防止应用忘记删除
+            lv_obj_del(old_app->screen);
+            old_app->screen = NULL;// 强制置空，避免应用遗忘
+        }
     }
 
-    // 6. 更新当前应用指针
+    // 更新当前应用指针
     current_app = app;
     ESP_LOGI(TAG, "Opened app: %s", name);
 }
@@ -197,12 +202,12 @@ QueueHandle_t get_ui_service_queue(void)
 // =============== UI 服务任务 ===============
 static void lvgl_tick_callback(void *arg)
 {
-    lv_tick_inc(5);
+    lv_tick_inc(20);
 }
 
 static void ui_service_task(void *arg)
 {
-    const TickType_t lvgl_period = pdMS_TO_TICKS(5);
+    const TickType_t lvgl_period = pdMS_TO_TICKS(33);
     event_data_t *evt = NULL;
 
     while (1) {
@@ -226,7 +231,6 @@ static void ui_service_task(void *arg)
             }
         }
         lv_timer_handler();
-        vTaskDelay(1);
     }
 }
 

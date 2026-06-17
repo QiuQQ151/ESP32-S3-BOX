@@ -1,13 +1,15 @@
 // led_service.c
-#include "led_service.h"
-#include "led_hal.h"
 #include <math.h>
 #include <string.h>
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+
+#include "led_service.h"
+#include "led_hal.h"
 #include "system_event.h"
+#include "system_config.h"
 
 // =================== 显示时长参数 ===================
 #define BREATH_PERIOD_MS      4000  // 呼吸周期
@@ -51,7 +53,7 @@ typedef struct {
 
 // 设置初始参数
 static panel_state_t led_panel[LED_HAL_DEVICE_MAX] = {
-    { .mode = LED_MODE_BULB, .brightness = 10, .solid_color = 0x0000FF00 },
+    { .mode = LED_MODE_MUSIC, .brightness = 10, .solid_color = 0x0000FF00 },
     { .mode = LED_MODE_BREATH, .brightness = 10, .solid_color = 0x0000FF00 },
 };
 
@@ -223,7 +225,7 @@ static void led_service_render_task(void *arg)
 {
     TickType_t start_tick = xTaskGetTickCount();
     while (1) { 
-        vTaskDelay(pdMS_TO_TICKS(33)); // 30Hz
+        vTaskDelay(pdMS_TO_TICKS(40)); // 10Hz
         float time_sec = (float)((xTaskGetTickCount() - start_tick) * portTICK_PERIOD_MS) / 1000.0f;
 
         // 对每一个led面板进行渲染
@@ -387,13 +389,13 @@ esp_err_t led_service_init(void)
     } 
 
     // 创建渲染任务
-    if (xTaskCreate(led_service_render_task, "led_service_render_task", 4096, NULL, 3, &led_render_task_handle) != pdPASS) {
+    if (xTaskCreate(led_service_render_task, "led_service_render_task", 4096, NULL, TASK_PRIO_LED_SERVICE, &led_render_task_handle) != pdPASS) {
         ESP_LOGE(TAG, "led_service_render_task create fail");
         return ESP_FAIL;
     }
 
     // 创建服务请求队列
-    led_service_request_queue = xQueueCreate(20, sizeof(event_data_t *));
+    led_service_request_queue = xQueueCreate(QUEUE_SERVICE_SIZE, sizeof(event_data_t *));
     if (!led_service_request_queue) {
         ESP_LOGE(TAG, "led_service_request_queue create fail");
         vTaskDelete(led_render_task_handle);
@@ -401,7 +403,7 @@ esp_err_t led_service_init(void)
     }
 
     // 创建服务分发任务
-    if (xTaskCreate(led_service_task, "led_service_task", 4096, NULL, 3, &led_service_task_handle) != pdPASS) {
+    if (xTaskCreatePinnedToCore(led_service_task, "led_service_task", 4096, NULL, TASK_PRIO_LED_SERVICE, &led_service_task_handle, TASK_CORE_SERVICE) != pdPASS) {
         ESP_LOGE(TAG, "led_service_task create fail");
         vTaskDelete(led_render_task_handle);
         vQueueDelete(led_service_request_queue);

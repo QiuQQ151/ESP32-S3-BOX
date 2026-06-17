@@ -196,7 +196,7 @@ lv_disp_t* lvgl_hal_init(void)
 
     // // =========================== 初始化液晶屏背光 ====================================
     lvgl_hal_brightness_init();
-    lvgl_hal_set_brightness(20);
+    lvgl_hal_set_brightness(100);
 
     // =========================lcd初始化=====================================================
     ESP_LOGI(TAG, "Initialize SPI bus");

@@ -7,13 +7,17 @@
 #include "lvgl.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
+
 #include "ui_service.h"
 #include "music_app.h"
 #include "system_event.h"
+#include "system_config.h"
 #include "keys_hal.h"
 #include "sntp_service.h"
 #include "audio_service.h"
 #include "led_service.h"
+
 
 static const char *TAG = "music_app";
 static ui_app_t s_music_app;
@@ -29,6 +33,7 @@ LV_IMG_DECLARE(icon_stop_40);
 static struct {
     lv_obj_t *time_label;
     lv_obj_t *track_label;
+    lv_obj_t *volume_slider;
     lv_obj_t *play_btn;
     lv_obj_t *play_icon;
     bool playing;
@@ -37,11 +42,6 @@ static struct {
 // ---------- 任务句柄 ----------
 static TaskHandle_t music_update_status_task_handle = NULL;
 static TaskHandle_t scan_task_handle = NULL;
-
-// ---------- 音乐文件定义 ----------
-#define MUSIC_ROOT_PATH       "/sdcard/music"        // 音乐根目录
-#define CACHE_FILE_PATH       "/sdcard/music/.track_cache"  // 缓存文件
-#define MAX_TRACKS            500
 
 typedef struct {
     char name[128];     // 文件名（不含路径）
@@ -64,7 +64,6 @@ static bool music_handle_key_event(key_event_data_t *key);
 static void music_app_led_control(led_mode_t mode, uint32_t arg);
 static void music_handle_change_to_audio(audio_service_cmd_t cmd);
 static void music_update_status_task(void *arg);
-static void music_update_time(void);
 static int  music_scan_directory(const char *root);
 static void scan_dir_recursive(const char *dir_path, int *count);
 static void music_scan_task(void *arg);
@@ -86,6 +85,7 @@ static void play_btn_event_cb(lv_event_t *e)   { music_play_pause(); }
 static void prev_btn_event_cb(lv_event_t *e)   { music_prev_track(); }
 static void next_btn_event_cb(lv_event_t *e)   { music_next_track(); }
 static void refresh_btn_event_cb(lv_event_t *e){ music_refresh(); }
+static void volume_slider_event_cb(lv_event_t *e);
 
 // ========== 注册函数 ==========
 void music_app_register(void)
@@ -120,11 +120,11 @@ static void music_on_create(ui_app_t *app)
     s_music_ui.time_label = lv_label_create(top_bar);
     lv_label_set_text(s_music_ui.time_label, "12:00");
     lv_obj_set_style_text_color(s_music_ui.time_label, lv_color_white(), 0);
-    lv_obj_align(s_music_ui.time_label, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_align(s_music_ui.time_label, LV_ALIGN_TOP_MID, 0, 0);
 
     // ---------- 曲目显示 + 刷新按钮 ----------
     lv_obj_t *track_area = lv_obj_create(app->screen);
-    lv_obj_set_size(track_area, 180, 36);
+    lv_obj_set_size(track_area, 220, 50);
     lv_obj_align(track_area, LV_ALIGN_CENTER, 0, -30);
     lv_obj_set_style_bg_opa(track_area, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(track_area, 0, 0);
@@ -134,8 +134,8 @@ static void music_on_create(ui_app_t *app)
     lv_label_set_text(s_music_ui.track_label, "扫描中...");
     lv_obj_set_style_text_color(s_music_ui.track_label, lv_color_white(), 0);
     lv_obj_set_style_text_font(s_music_ui.track_label, &font_alipuhui20, 0);
-    lv_obj_set_width(s_music_ui.track_label, 135);
-    lv_label_set_long_mode(s_music_ui.track_label, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_obj_set_width(s_music_ui.track_label, 185);               // 宽度设为容器宽度
+    lv_label_set_long_mode(s_music_ui.track_label, LV_LABEL_LONG_WRAP);  // 改为换行模式
     lv_obj_align(s_music_ui.track_label, LV_ALIGN_LEFT_MID, 0, 0);
 
     // 刷新按钮
@@ -150,6 +150,14 @@ static void music_on_create(ui_app_t *app)
     lv_obj_t *refresh_img = lv_img_create(refresh_btn);
     lv_img_set_src(refresh_img, &icon_reflash_28);
     lv_obj_center(refresh_img);
+
+    // ---------- 音量滑块（频道区域与底部控制栏之间）----------
+    s_music_ui.volume_slider = lv_slider_create(app->screen);
+    lv_obj_set_size(s_music_ui.volume_slider, 160, 10);
+    lv_obj_align_to(s_music_ui.volume_slider, track_area, LV_ALIGN_OUT_BOTTOM_MID, 0, 10);
+    lv_slider_set_range(s_music_ui.volume_slider, 0, 100);
+    lv_slider_set_value(s_music_ui.volume_slider, volume, LV_ANIM_OFF);
+    lv_obj_add_event_cb(s_music_ui.volume_slider, volume_slider_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
     // ---------- 底部控制栏 ----------
     lv_obj_t *control_bar = lv_obj_create(app->screen);
@@ -196,36 +204,31 @@ static void music_on_create(ui_app_t *app)
     lv_obj_center(s_music_ui.play_icon);
     s_music_ui.playing = false;
 
-    volume = get_audio_volume();
-
-    // 创建时间更新任务
-    xTaskCreate(music_update_status_task, "music_update_status", 4096, NULL, 5,
-                &music_update_status_task_handle);
-
-    // 启动后台扫描任务
-    xTaskCreate(music_scan_task, "music_scan", 4096, NULL, 2, &scan_task_handle);
-
-    music_app_led_control(LED_MODE_MUSIC, 100);
-    ESP_LOGI(TAG, "Music UI created");
+    ESP_LOGI(TAG, "Music UI created");   
 }
 
 static void music_on_open(ui_app_t *app)
 {
+
+    volume = get_audio_volume();
+
+    // 创建更新任务
+    xTaskCreatePinnedToCore(music_update_status_task, "music_update_status", 4096, NULL, TASK_PRIO_MUSIC_APP, &music_update_status_task_handle, TASK_CORE_APP);
+    // 启动后台扫描任务
+    xTaskCreatePinnedToCore(music_scan_task, "music_scan", 4096, NULL, TASK_PRIO_MUSIC_APP, &scan_task_handle, TASK_CORE_APP);
+    music_app_led_control(LED_MODE_MUSIC, 100);
+
     if (s_music_ui.track_label && track_count > 0) {
         lv_label_set_text(s_music_ui.track_label, track_list[current_track_index].name);
         lv_obj_set_style_text_font(s_music_ui.track_label, &font_alipuhui20, 0);
     }
+
     ESP_LOGI(TAG, "music_on_open");
 }
 
 static void music_on_close(ui_app_t *app)
 {
     ESP_LOGI(TAG, "music_on_close");
-}
-
-static void music_on_destroy(ui_app_t *app)
-{
-    ESP_LOGI(TAG, "music_on_destroy");
     // 停止扫描任务
     if (scan_task_handle) {
         vTaskDelete(scan_task_handle);
@@ -235,7 +238,12 @@ static void music_on_destroy(ui_app_t *app)
         vTaskDelete(music_update_status_task_handle);
         music_update_status_task_handle = NULL;
     }
-    music_handle_change_to_audio(AUDIO_CMD_DISCONNECT);
+    music_handle_change_to_audio(AUDIO_CMD_DISCONNECT);    
+}
+
+static void music_on_destroy(ui_app_t *app)
+{
+    ESP_LOGI(TAG, "music_on_destroy");
 
     if (track_list) {
         free(track_list);
@@ -243,7 +251,11 @@ static void music_on_destroy(ui_app_t *app)
     }
     track_count = 0;
     memset(&s_music_ui, 0, sizeof(s_music_ui));
-    app->screen = NULL;
+
+    if (app->screen) {
+        lv_obj_del(app->screen);
+        app->screen = NULL;
+    }
 }
 
 static void music_on_event(ui_app_t *app, event_data_t *event)
@@ -318,25 +330,6 @@ static bool music_handle_key_event(key_event_data_t *key)
     return false;
 }
 
-static void music_update_time(void)
-{
-    sntp_service_receive_data_t *sntp_payload = malloc(sizeof(sntp_service_receive_data_t));
-    if (!sntp_payload) return;
-    sntp_payload->cmd = SNTP_CMD_GET_TIME;
-
-    event_data_t *evt = malloc(sizeof(event_data_t));
-    if (!evt) { free(sntp_payload); return; }
-    evt->service_id = UI_SERVICE;
-    evt->event_type = REQUEST;
-    evt->reply_queue = get_ui_service_queue();
-    evt->data = sntp_payload;
-    evt->data_len = sizeof(sntp_service_receive_data_t);
-
-    if (xQueueSend(get_sntp_service_queue(), &evt, 0) != pdPASS) {
-        free(sntp_payload);
-        free(evt);
-    }
-}
 
 // ========== 控制功能 ==========
 static void music_play_pause(void)
@@ -406,6 +399,19 @@ static void music_refresh(void)
     xTaskCreate(music_scan_task, "music_scan", 4096, NULL, 2, &scan_task_handle);
 }
 
+// 拖动滑块时更新音量
+static void volume_slider_event_cb(lv_event_t *e)
+{
+    lv_obj_t *slider = lv_event_get_target(e);
+    int val = lv_slider_get_value(slider);
+    if (val != volume) {
+        volume = val;
+        music_handle_change_to_audio(AUDIO_CMD_VOLUME);
+        music_app_led_control(LED_MODE_VOLUME, volume);
+        ESP_LOGI(TAG, "Volume slider set to %d", volume);
+    }
+}
+
 static void music_handle_change_to_audio(audio_service_cmd_t cmd)
 {
     audio_service_receive_data_t *audio_payload = malloc(sizeof(audio_service_receive_data_t));
@@ -447,6 +453,9 @@ static void music_handle_change_to_audio(audio_service_cmd_t cmd)
     if (xQueueSend(get_audio_service_queue(), &evt_data, 0) != pdPASS) {
         free(audio_payload);
         free(evt_data);
+        ESP_LOGE(TAG, "Send audio play request failed");
+    } else{
+      ESP_LOGI(TAG, "Send audio play request ok");  
     }
 }
 
@@ -490,7 +499,7 @@ static void scan_dir_recursive(const char *dir_path, int *count)
     if (!dir) return;
 
     struct dirent *entry;
-    while ((entry = readdir(dir)) != NULL && *count < MAX_TRACKS) {
+    while ((entry = readdir(dir)) != NULL && *count < MUSIC_MAX_TRACKS) {
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
             continue;
 
@@ -536,7 +545,7 @@ static int music_scan_directory(const char *root)
         track_list = NULL;
     }
     track_count = 0;
-    track_list = (music_track_t *)calloc(MAX_TRACKS, sizeof(music_track_t));
+    track_list = (music_track_t *)calloc(MUSIC_MAX_TRACKS, sizeof(music_track_t));
     if (!track_list) return 0;
 
     int count = 0;
@@ -553,7 +562,7 @@ static int music_scan_directory(const char *root)
 
 // ========== 缓存读写 ==========
 static bool load_cache(void) {
-    FILE *fp = fopen(CACHE_FILE_PATH, "rb");
+    FILE *fp = fopen(MUSIC_CACHE_FILE_PATH, "rb");
     if (!fp) return false;
 
     // 读取文件数量
@@ -562,7 +571,7 @@ static bool load_cache(void) {
         fclose(fp);
         return false;
     }
-    if (count <= 0 || count > MAX_TRACKS) {
+    if (count <= 0 || count > MUSIC_MAX_TRACKS) {
         fclose(fp);
         return false;
     }
@@ -595,7 +604,7 @@ static bool load_cache(void) {
 static bool save_cache(void) {
     if (track_count == 0 || !track_list) return false;
 
-    FILE *fp = fopen(CACHE_FILE_PATH, "wb");
+    FILE *fp = fopen(MUSIC_CACHE_FILE_PATH, "wb");
     if (!fp) return false;
 
     // 写入数量
@@ -647,10 +656,10 @@ static void music_scan_task(void *arg) {
     vTaskDelete(NULL);
 }
 
-// 修改 music_update_status_task 以处理扫描完成通知
+// 
 static void music_update_status_task(void *arg) {
     while (1) {
-        // 等待扫描完成通知（超时 1 秒也用于更新时间）
+        // 等待扫描完成通知
         if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000))) {
             // 扫描完成，更新 UI
             if (track_count > 0 && s_music_ui.track_label) {
@@ -667,8 +676,14 @@ static void music_update_status_task(void *arg) {
                 lv_label_set_text(s_music_ui.track_label, "无音乐");
                 lv_obj_set_style_text_font(s_music_ui.track_label, &font_alipuhui20, 0);
             }
+
+
         }
-        // 每秒更新时间
-        music_update_time();
+        // 检查音量变化
+        int last_volume = volume;
+        volume = get_audio_volume();
+        if(last_volume != volume){
+            lv_slider_set_value(s_music_ui.volume_slider, volume, LV_ANIM_ON);
+        }        
     }
 }

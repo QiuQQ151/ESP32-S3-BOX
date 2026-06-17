@@ -44,11 +44,11 @@ typedef struct ui_app {
     const char *name;                       // 应用名称（唯一标识）
     lv_obj_t *screen;                       // 主屏幕对象（首次 on_create 后赋值）
 
-    // 生命周期回调
-    void (*on_create)(struct ui_app *app);  // 屏幕首次创建时调用
-    void (*on_open)(struct ui_app *app);    // 应用被打开/切换到前台时调用
-    void (*on_close)(struct ui_app *app);   // 应用被关闭/离开前台时调用
-    void (*on_destroy)(struct ui_app *app); // 应用资源释放时调用（可选）
+    // 生命周期回调（注意顺序）
+    void (*on_create)(struct ui_app *app);  // 只创建屏幕资源！
+    void (*on_open)(struct ui_app *app);    // 建立其它资源
+    void (*on_close)(struct ui_app *app);   // 清理其它资源
+    void (*on_destroy)(struct ui_app *app); // 只清理显示资源！
 
     // 按键处理（可选，若实现 on_event 可不用此回调）
     bool (*on_key_event)(struct ui_app *app, void *key_event); // key_event 为 key_event_data_t*

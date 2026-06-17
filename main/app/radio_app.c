@@ -5,6 +5,8 @@
 #include "lvgl.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
+#include "system_config.h"
 #include "ui_service.h"
 #include "radio_app.h"
 #include "system_event.h"
@@ -36,8 +38,6 @@ static struct {
     bool playing;
 } s_radio_ui = {0};
 
-// ---------- 任务句柄 ----------
-static TaskHandle_t radio_update_status_task_handle = NULL;
 
 // ---------- 电台定义 ----------
 typedef struct {
@@ -106,8 +106,6 @@ static void radio_on_event(ui_app_t *app, event_data_t *event);
 static bool radio_handle_key_event(key_event_data_t *key);
 static void radio_app_led_control(led_mode_t mode, uint32_t arg);
 static void radio_handle_change_to_audio(audio_service_cmd_t cmd);
-static void radio_update_status_task(void *arg);
-static void radio_update_time(void);
 
 // 按钮操作
 static void radio_play_pause(void);
@@ -123,6 +121,9 @@ static void prev_btn_event_cb(lv_event_t *e)   { radio_prev_channel(); }
 static void next_btn_event_cb(lv_event_t *e)   { radio_next_channel(); }
 static void refresh_btn_event_cb(lv_event_t *e){ radio_refresh(); }
 static void volume_slider_event_cb(lv_event_t *e); // 新增滑块回调
+
+static TaskHandle_t radio_update_status_task_handle = NULL;
+static void radio_update_status_task(void *arg);
 
 // ========== 注册函数 ==========
 void radio_app_register(void)
@@ -161,11 +162,11 @@ static void radio_on_create(ui_app_t *app)
     s_radio_ui.time_label = lv_label_create(top_bar);
     lv_label_set_text(s_radio_ui.time_label, "12:00");
     lv_obj_set_style_text_color(s_radio_ui.time_label, lv_color_white(), 0);
-    lv_obj_align(s_radio_ui.time_label, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_align(s_radio_ui.time_label, LV_ALIGN_TOP_MID, 0, 0);
 
-    // ---------- 频道滚动 + 刷新按钮 ----------
+    // ---------- 频道 + 刷新按钮 ----------
     lv_obj_t *channel_area = lv_obj_create(app->screen);
-    lv_obj_set_size(channel_area, 180, 36);
+    lv_obj_set_size(channel_area, 220, 50);
     lv_obj_align(channel_area, LV_ALIGN_CENTER, 0, -30);
     lv_obj_set_style_bg_opa(channel_area, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(channel_area, 0, 0);
@@ -177,8 +178,8 @@ static void radio_on_create(ui_app_t *app)
     lv_obj_set_style_text_color(s_radio_ui.channel_label, lv_color_white(), 0);
     LV_FONT_DECLARE(font_alipuhui20);
     lv_obj_set_style_text_font(s_radio_ui.channel_label, &font_alipuhui20, 0);
-    lv_obj_set_width(s_radio_ui.channel_label, 135);
-    lv_label_set_long_mode(s_radio_ui.channel_label, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_obj_set_width(s_radio_ui.channel_label, 180);
+    lv_label_set_long_mode(s_radio_ui.channel_label, LV_LABEL_LONG_DOT); // 卡顿点
     lv_obj_align(s_radio_ui.channel_label, LV_ALIGN_LEFT_MID, 0, 0);
 
     // 刷新按钮
@@ -243,47 +244,49 @@ static void radio_on_create(ui_app_t *app)
     lv_obj_align(s_radio_ui.play_btn, LV_ALIGN_CENTER, 0, 0);
     lv_obj_add_event_cb(s_radio_ui.play_btn, play_btn_event_cb, LV_EVENT_CLICKED, NULL);
     s_radio_ui.play_icon = lv_img_create(s_radio_ui.play_btn);
-    lv_img_set_src(s_radio_ui.play_icon, &icon_stop_40);
+    lv_img_set_src(s_radio_ui.play_icon, &icon_play_40);
     lv_obj_center(s_radio_ui.play_icon);
-    s_radio_ui.playing = false;
-    
-    volume = 50;
-    radio_handle_change_to_audio(AUDIO_CMD_CONNECT);// 首次连接
-       // 启动状态更新任务
-    xTaskCreate(radio_update_status_task, "radio_update_status", 4096, NULL, 3,
-                &radio_update_status_task_handle);
-    radio_app_led_control(LED_MODE_OFF, 100);
+    s_radio_ui.playing = true;
+
     ESP_LOGI(TAG, "Radio UI created");
 }
 
 static void radio_on_open(ui_app_t *app)
 {
-    radio_update_time();
+    volume = get_audio_volume();
+    radio_handle_change_to_audio(AUDIO_CMD_CONNECT);
+    radio_app_led_control(LED_MODE_MUSIC, 100);
+
+    // 创建更新任务
+    xTaskCreatePinnedToCore(radio_update_status_task, "radio_update_status", 4096, NULL, TASK_PRIO_RADIO_APP, &radio_update_status_task_handle, TASK_CORE_APP);
+
     // 恢复显示当前电台
     if (s_radio_ui.channel_label && station_count > 0) {
         lv_label_set_text(s_radio_ui.channel_label, stations[selected_station_index].name);
     }
-    ESP_LOGI(TAG, "radio_on_open, current station: %s",
-             (station_count > 0) ? stations[selected_station_index].name : "none");
+    ESP_LOGI(TAG, "radio_on_open, current station: %s", station_count > 0 ? stations[selected_station_index].name : "none");
 }
 
 static void radio_on_close(ui_app_t *app)
 {
     ESP_LOGI(TAG, "radio_on_close");
-}
-
-static void radio_on_destroy(ui_app_t *app)
-{
-    ESP_LOGI(TAG, "radio_on_destroy");
-    // 删除状态更新任务
     if (radio_update_status_task_handle) {
         vTaskDelete(radio_update_status_task_handle);
         radio_update_status_task_handle = NULL;
     }
     // 通知音频服务关闭连接
-    radio_handle_change_to_audio(AUDIO_CMD_DISCONNECT);
+    radio_handle_change_to_audio(AUDIO_CMD_DISCONNECT);    
+}
+
+static void radio_on_destroy(ui_app_t *app)
+{
+    ESP_LOGI(TAG, "radio_on_destroy");
 
     // 释放内存
+    if (app->screen) {
+        lv_obj_del(app->screen);
+        app->screen = NULL;
+    }
     memset(&s_radio_ui, 0, sizeof(s_radio_ui));
     app->screen = NULL;
 }
@@ -352,34 +355,7 @@ static bool radio_handle_key_event(key_event_data_t *key)
     return false;
 }
 
-// ========== 状态更新任务 ==========
-static void radio_update_status_task(void *arg)
-{
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(60000));  // 60s刷新一次时间
-        //radio_update_time();   // 会引起播放卡顿
-    }
-}
 
-static void radio_update_time(void)
-{
-    sntp_service_receive_data_t *sntp_payload = malloc(sizeof(sntp_service_receive_data_t));
-    if (!sntp_payload) return;
-    sntp_payload->cmd = SNTP_CMD_GET_TIME;
-
-    event_data_t *evt = malloc(sizeof(event_data_t));
-    if (!evt) { free(sntp_payload); return; }
-    evt->service_id = UI_SERVICE;
-    evt->event_type = REQUEST;
-    evt->reply_queue = get_ui_service_queue();
-    evt->data = sntp_payload;
-    evt->data_len = sizeof(sntp_service_receive_data_t);
-
-    if (xQueueSend(get_sntp_service_queue(), &evt, 0) != pdPASS) {
-        free(sntp_payload);
-        free(evt);
-    }
-}
 
 // ========== 控制功能 ==========
 static void radio_play_pause(void)
@@ -446,12 +422,18 @@ static void radio_handle_change_to_audio(audio_service_cmd_t cmd){
             evt_data->reply_queue = NULL;
             evt_data->data = audio_payload;
             evt_data->data_len = sizeof(audio_service_receive_data_t);
-            xQueueSend(get_audio_service_queue(), &evt_data, 0);
+            if( xQueueSend(get_audio_service_queue(), &evt_data, 0) != pdPASS ){
+                free(audio_payload);
+                free(evt_data);
+                ESP_LOGI(TAG, "Send audio request fail");
+            } else{
+               ESP_LOGI(TAG, "Send audio request ok");                
+            }
         }
     }
 }
 
-// 新增滑块回调：拖动滑块时更新音量
+// 拖动滑块时更新音量
 static void volume_slider_event_cb(lv_event_t *e)
 {
     lv_obj_t *slider = lv_event_get_target(e);
@@ -513,5 +495,20 @@ static void radio_app_led_control(led_mode_t mode, uint32_t arg) {
         }
     } else {
         ESP_LOGE(TAG, "malloc led_service_receive_data_t err");
+    }
+}
+
+static void radio_update_status_task(void *arg) {
+    while (1) {
+        // 等待扫描完成通知
+        if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000))) {
+
+        }
+        // 检查音量变化
+        int last_volume = volume;
+        volume = get_audio_volume();
+        if(last_volume != volume){
+            lv_slider_set_value(s_radio_ui.volume_slider, volume, LV_ANIM_ON);
+        }        
     }
 }

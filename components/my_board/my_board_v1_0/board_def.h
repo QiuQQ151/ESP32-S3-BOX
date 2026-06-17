@@ -57,7 +57,7 @@ extern audio_hal_func_t AUDIO_CODEC_ES7210_DEFAULT_HANDLE;
         .codec_mode = AUDIO_HAL_CODEC_MODE_ENCODE,    \
         .i2s_iface = {                                  \
             .mode     = AUDIO_HAL_MODE_SLAVE,           \
-            .fmt      = AUDIO_HAL_I2S_DSP,              \
+            .fmt      = AUDIO_HAL_I2S_NORMAL,              \
             .samples  = AUDIO_HAL_48K_SAMPLES,          \
             .bits     = AUDIO_HAL_BIT_LENGTH_16BITS,    \
         },                                              \
@@ -65,7 +65,7 @@ extern audio_hal_func_t AUDIO_CODEC_ES7210_DEFAULT_HANDLE;
 
 /* ==================== ES8311 播放配置（标准 I2S） ==================== */
 #define AUDIO_DAC_PLAYBACK_CONFIG() {                   \
-        .dac_output = AUDIO_HAL_ADC_INPUT_ALL,         \
+        .dac_output = AUDIO_HAL_DAC_OUTPUT_ALL,         \
         .codec_mode = AUDIO_HAL_CODEC_MODE_DECODE,    \
         .i2s_iface = {                                  \
             .mode     = AUDIO_HAL_MODE_SLAVE,           \

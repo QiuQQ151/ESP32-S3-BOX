@@ -17,26 +17,29 @@
 #include "wav_decoder.h"
 #include "fatfs_stream.h"
 #include "raw_stream.h"
+
+
 #include "usb_device_uac.h"
 #include "board.h"
 #include "hal/tca9535_hal.h"
 #include "hal/sd_hal.h"
-
 #include "system_event.h"
 #include "audio_service.h"
+#include "system_config.h"
+
 
 static const char *TAG = "audio_service";
 
 // ─── 硬件句柄 ─────────────────────────────────
 static audio_board_handle_t board_handle = NULL;
 
-// ─── 输出 pipeline（播放） ─────────────────
+// ─── 输出 pipeline（通用播放） ─────────────────
 static audio_pipeline_handle_t pipeline_out = NULL;
 static audio_element_handle_t   el_out_prev = NULL;
 static audio_element_handle_t   el_out_mid  = NULL;
 static audio_element_handle_t   el_out_back = NULL;
 
-// ─── 输入 pipeline（录音） ─────────────────
+// ─── 输入 pipeline（通用录音） ─────────────────
 static audio_pipeline_handle_t pipeline_in = NULL;
 static audio_element_handle_t   el_in_prev = NULL;
 static audio_element_handle_t   el_in_mid  = NULL;
@@ -49,9 +52,12 @@ static QueueHandle_t s_notify_queue = NULL;
 static audio_service_state_t audio_out_state = AUDIO_SERVICE_IDLE;
 static audio_service_state_t audio_in_state = AUDIO_SERVICE_IDLE;
 static char   el_url[200] = {0};  // 文件url
-static audio_element_info_t info = {0}; // 当前播放/录音的音频格式信息
+static audio_element_info_t info = {.bits = 16,.channels = 2,.sample_rates = 48000,}; // 当前播放/录音的音频格式信息
 static int    audio_volume = 50;
-static bool   g_uac_active = false;
+
+static bool   g_uac_out_active = false;
+static bool   g_uac_in_active = false;
+
 static bool   audio_out_active = false;
 static bool   audio_in_active = false;
 
@@ -93,13 +99,13 @@ esp_err_t audio_service_init(void)
     power_hal_pa_enable(1);
     sd_hal_init();
 
-    request_queue = xQueueCreate(10, sizeof(event_data_t *));
+    request_queue = xQueueCreate(QUEUE_SERVICE_SIZE, sizeof(event_data_t *));
     if (!request_queue) {
         ESP_LOGE(TAG, "Failed to create request queue");
         return ESP_ERR_NO_MEM;
     }
 
-    xTaskCreate(audio_service_task, "audio_srv", 16 * 1024, NULL, 13, NULL); // 6
+    xTaskCreatePinnedToCore(audio_service_task, "audio_service_task", 4 * 1024, NULL, TASK_PRIO_AUDIO_SERVICE, NULL, TASK_CORE_SERVICE); // 6
 
     return ESP_OK;
 }
@@ -181,8 +187,8 @@ static void audio_service_task(void *arg)
 // ─── 销毁所有管线 ─────────────────────────────
 static void destroy_pipeline(int direction)
 {
-    g_uac_active = false; // 必须在销毁管道前关闭 UAC 活动标志，以避免回调访问已销毁的元素引发错误
     if(direction == dre_output){
+        g_uac_out_active = false; // 必须在销毁管道前关闭 UAC 活动标志，以避免回调访问已销毁的元素引发错误
         if (pipeline_out) {
             audio_pipeline_stop(pipeline_out);
             audio_pipeline_wait_for_stop(pipeline_out);
@@ -195,9 +201,11 @@ static void destroy_pipeline(int direction)
         el_out_mid  = NULL;
         el_out_back = NULL;
         audio_out_active = false;
+        power_hal_pa_enable(0);
     }
 
     if(direction == dre_input){
+        g_uac_in_active = false; // 必须在销毁管道前关闭 UAC 活动标志，以避免回调访问已销毁的元素引发错误
         if ( pipeline_in ) {
             audio_pipeline_stop(pipeline_in);
             audio_pipeline_wait_for_stop(pipeline_in);
@@ -219,18 +227,40 @@ static void handle_connect(audio_service_receive_data_t *req, QueueHandle_t repl
 {
     strncpy(el_url, req->url, sizeof(el_url) - 1);
     set_audio_volume(req->volume);
-
+    
+    // 建立管道
     esp_err_t ret = build_pipeline(req->prv_type, req->midle_type, req->back_type);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to build pipeline");
         goto connect_fail;
     }
 
+    // 检查是否是UAC 初始化 UAC（如需要，只初始化一次）
+    if ( req->prv_type == usb_uac || req->back_type == usb_uac) {
+        static bool uac_dev_inited = false;
+        if (!uac_dev_inited) {
+            uac_device_config_t uac_cfg = {
+                .output_cb     =  uac_output_cb,
+                .input_cb      = uac_input_cb,
+                .set_volume_cb = uac_volume_cb,
+                .set_mute_cb   = uac_mute_cb,
+            };
+            if (uac_device_init(&uac_cfg) != ESP_OK) {
+                ESP_LOGE(TAG, "UAC device init failed");
+                goto connect_fail;
+            }
+            uac_dev_inited = true;
+        }
+    }
+
     // 根据实际创建的管线决定后续操作
     if (pipeline_out && audio_out_active == false ) {
-        // 先确定 UAC 标志（无论是否自动启动）
-        g_uac_active = (req->prv_type == usb_uac);
+        // 播放管线
+        if(req->prv_type == usb_uac){
+            g_uac_out_active = true;
+        }
         if (req->start_after_connect) {
+            power_hal_pa_enable(1);
             audio_pipeline_run(pipeline_out);
             audio_out_state = AUDIO_SERVICE_PLAYING;
             audio_out_active = true;
@@ -239,10 +269,11 @@ static void handle_connect(audio_service_receive_data_t *req, QueueHandle_t repl
             audio_out_active = false;
         }
     }
+
     if (pipeline_in && audio_in_active == false) { 
         // 录音管线
         if (req->back_type == usb_uac) {
-            g_uac_active = true;            // 输入管线也可能涉及 UAC
+            g_uac_in_active = true;            // 输入管线也可能涉及 UAC
         }
         if (req->start_after_connect) {
             audio_pipeline_run(pipeline_in);
@@ -275,34 +306,54 @@ connect_fail:
  */
 static audio_element_handle_t create_element_by_role(audio_service_stream_type_t type, bool is_output)
 {
+   int rb_base = 50; 
    if( type !=  audio_type_none){
        switch (type) {
-           // 编解码器
+           // 编解码器 (中间件)
             case mp3_dec: {
                 mp3_decoder_cfg_t cfg = DEFAULT_MP3_DECODER_CONFIG();
+                cfg.out_rb_size        = 2*rb_base*1024;
+                cfg.task_prio = 22;
+                cfg.stack_in_ext       = true;  
                 return mp3_decoder_init(&cfg);
             }
             case aac_dec: {
-                aac_decoder_cfg_t cfg = { .out_rb_size = 32*1024, .task_stack = 8*1024, .task_prio = 13, .stack_in_ext = true };
+                aac_decoder_cfg_t cfg = DEFAULT_AAC_DECODER_CONFIG();
+                cfg.out_rb_size        = 2*rb_base*1024;
+                cfg.stack_in_ext       = true;  
                 return aac_decoder_init(&cfg);
             }
             case flac_dec: {
-                flac_decoder_cfg_t cfg = { .out_rb_size = 4*12*1024, .task_stack = 24*1024, .task_prio = 13, .stack_in_ext = true };
+                flac_decoder_cfg_t cfg = DEFAULT_FLAC_DECODER_CONFIG();
+                cfg.out_rb_size        = 2*rb_base*1024;
+                cfg.stack_in_ext       = true;                       
                 return flac_decoder_init(&cfg);
             }
             case wav_dec: {
-                wav_decoder_cfg_t cfg = { .out_rb_size = 32*1024, .task_stack = 6*1024, .task_prio = 13, .stack_in_ext = true };
+                wav_decoder_cfg_t cfg = DEFAULT_WAV_DECODER_CONFIG();
+                cfg.out_rb_size        = 2*rb_base*1024;
+                cfg.stack_in_ext       = true;  
                 return wav_decoder_init(&cfg);
             }
+            // 缓冲区(中间件)
+            case raw_hal: {
+                raw_stream_cfg_t raw_cfg = RAW_STREAM_CFG_DEFAULT();
+                raw_cfg.type =  AUDIO_STREAM_WRITER; 
+                raw_cfg.out_rb_size = 2*rb_base*1024;
+                audio_element_handle_t el = raw_stream_init(&raw_cfg);
+                if (el) audio_element_setinfo(el, &info);
+                return el;
+            }            
             // 流元素
             case http_str:
             case https_str: {
                 http_stream_cfg_t http_cfg = HTTP_STREAM_CFG_DEFAULT();
                 http_cfg.type = (is_output == true) ? AUDIO_STREAM_READER : AUDIO_STREAM_WRITER;
-                http_cfg.enable_playlist_parser = false;
-                http_cfg.out_rb_size = 8 * 1024;
-                http_cfg.task_stack = 4 * 1024;
-                http_cfg.request_size = 4096;
+                http_cfg.out_rb_size    = ( is_output ? rb_base : 3*rb_base) * 1024;    // 200 KB 输出环形缓冲（抗网络抖动）
+                http_cfg.task_prio   = 21;
+                //http_cfg.request_size   = 4 * 1024;    // 4 KB 每次请求块（减少 HTTP 请求频次）
+                //http_cfg.task_stack     = 8 * 1024;     // 8 KB 任务栈（错误处理需要更多空间）
+                http_cfg.stack_in_ext   = true; 
                 audio_element_handle_t el = http_stream_init(&http_cfg);
                 if (el) audio_element_set_uri(el, el_url);
                 return el;
@@ -310,33 +361,20 @@ static audio_element_handle_t create_element_by_role(audio_service_stream_type_t
             case file_str: {
                 fatfs_stream_cfg_t fatfs_cfg = FATFS_STREAM_CFG_DEFAULT();
                 fatfs_cfg.type = (is_output == true) ? AUDIO_STREAM_READER : AUDIO_STREAM_WRITER;
-                fatfs_cfg.buf_sz = 50 * 1024;
+                fatfs_cfg.buf_sz = ( is_output ? rb_base : 3*rb_base) * 1024;
                 fatfs_cfg.ext_stack = true;
                 audio_element_handle_t el = fatfs_stream_init(&fatfs_cfg);
                 if (el) audio_element_set_uri(el, el_url);
                 return el;
             }
-            // 缓冲区
-            case raw_hal: {
-                raw_stream_cfg_t raw_cfg = RAW_STREAM_CFG_DEFAULT();
-                raw_cfg.type =  AUDIO_STREAM_WRITER; 
-                raw_cfg.out_rb_size = 8 * 1024;
-                audio_element_handle_t el = raw_stream_init(&raw_cfg);
-                if (el) audio_element_setinfo(el, &info);
-                return el;
-            }
-            // 底层i2s，不要使用外部ram
+            // 底层i2s
             case i2s_hal: {
-                static bool is_i2s_init = false;
                 audio_element_handle_t el = NULL;
-                i2s_stream_cfg_t i2s_cfg = I2S_STREAM_CFG_DEFAULT_WITH_PARA(I2S_NUM_0, 48000, I2S_DATA_BIT_WIDTH_16BIT, AUDIO_STREAM_READER);
+                i2s_stream_cfg_t i2s_cfg = I2S_STREAM_CFG_DEFAULT_WITH_PARA(I2S_NUM_0, info.sample_rates, I2S_DATA_BIT_WIDTH_16BIT, AUDIO_STREAM_READER);
                 i2s_cfg.type = (is_output == true) ? AUDIO_STREAM_WRITER : AUDIO_STREAM_READER; // 播放到喇叭往i2s写，录音从i2s读
-                // 如果是第一次初始化 i2s，正常安装驱动；如果之前已经初始化过（可能是输入管线先占用了 i2s），则复用已有驱动
-                if (is_i2s_init) {  
-                    i2s_cfg.uninstall_drv = true;
-                }
+                i2s_cfg.task_prio = 23;
+                i2s_cfg.out_rb_size = ( is_output ? 3*rb_base : rb_base) * 1024;
                 el = i2s_stream_init(&i2s_cfg);
-                is_i2s_init = true;
                 if (el) audio_element_setinfo(el, &info);
                 return el;
             }
@@ -359,31 +397,9 @@ static esp_err_t build_pipeline(audio_service_stream_type_t prv_type,
         is_output = true;
         destroy_pipeline(dre_output);
     } else{
+        is_output = false;
         destroy_pipeline(dre_input);
     }
-
-    // 2. 初始化 UAC（如需要）
-    if (prv_type == usb_uac || back_type == usb_uac) {
-        static bool uac_dev_inited = false;
-        if (!uac_dev_inited) {
-            uac_device_config_t uac_cfg = {
-                .output_cb     = uac_output_cb,
-                .input_cb      = uac_input_cb,
-                .set_volume_cb = uac_volume_cb,
-                .set_mute_cb   = uac_mute_cb,
-            };
-            if (uac_device_init(&uac_cfg) != ESP_OK) {
-                ESP_LOGE(TAG, "UAC device init failed");
-                return ESP_FAIL;
-            }
-            uac_dev_inited = true;
-        }
-    }
-
-    // 3. 音频信息
-    info.bits = 16;
-    info.channels = 2;  //2
-    info.sample_rates = 48000;
 
     // 4. 创建三个元素(usb_uac会返回NULL)
     audio_element_handle_t el_prev = create_element_by_role(prv_type, is_output);
@@ -433,6 +449,7 @@ static esp_err_t build_pipeline(audio_service_stream_type_t prv_type,
     }
 
     ESP_LOGI(TAG, "%s pipeline assembled", is_output ? "Output" : "Input");
+
     return ESP_OK;
 
 fail:
@@ -458,7 +475,7 @@ static void handle_play(QueueHandle_t reply_queue)
     }
     if (audio_out_state == AUDIO_SERVICE_PAUSED) {
         if (pipeline_out) {
-            if (g_uac_active) {
+            if (g_uac_out_active) {
                 audio_pipeline_resume(pipeline_out);
             } else {
                 if (el_out_back) audio_element_resume(el_out_back, 0, portMAX_DELAY);  
@@ -493,7 +510,7 @@ static void handle_pause(QueueHandle_t reply_queue)
         return;
     }
     if (pipeline_out) {
-        if (g_uac_active) {
+        if (g_uac_out_active) {
             audio_pipeline_pause(pipeline_out);
         } else {
             if (el_out_prev) audio_element_pause(el_out_prev);
@@ -511,7 +528,7 @@ static void handle_pause(QueueHandle_t reply_queue)
 // ─── 播放结束检测 ────────────────────────────
 static void check_playback_end(void)
 {
-    if (g_uac_active) return;
+    if (g_uac_out_active) return;
     if (audio_out_state != AUDIO_SERVICE_PLAYING && audio_out_state != AUDIO_SERVICE_PAUSED) return;
     if (!el_out_mid) return;   // 无解码器不检测
 
@@ -560,7 +577,7 @@ static void send_notification(audio_service_cmd_t cmd)
 // ─── USB UAC 回调────────────────────
 static esp_err_t uac_output_cb(uint8_t *data, size_t len, void *arg)
 {
-    if (el_out_mid && g_uac_active ) {
+    if (el_out_mid && g_uac_out_active ) {
         raw_stream_write(el_out_mid, (char *)data, len);
         return ESP_OK;
     }
@@ -569,7 +586,7 @@ static esp_err_t uac_output_cb(uint8_t *data, size_t len, void *arg)
 
 static esp_err_t uac_input_cb(uint8_t *data, size_t len, size_t *bytes_read, void *arg)
 {
-    if (el_in_mid && g_uac_active) {
+    if (el_in_mid && g_uac_in_active) {
         int ret = raw_stream_read(el_in_mid, (char *)data, len);
         if (ret > 0) {
             *bytes_read = ret;

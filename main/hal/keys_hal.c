@@ -1,10 +1,12 @@
-#include "keys_hal.h"
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+
+#include "system_config.h"
+#include "keys_hal.h"
 #include "system_event.h"   //
 #include "tca9535_hal.h"    // 读取IO扩展口的KEY_POWER键输入状态
 #include "ui_service.h"     // 默认往ui_service发送按键事件
@@ -222,7 +224,7 @@ esp_err_t key_hal_init(void)
         s_key_configs[i].last_tick = 0;
     }
 
-    s_event_queue = xQueueCreate(20, sizeof(hal_key_event_t));
+    s_event_queue = xQueueCreate(QUEUE_HAL_SIZE, sizeof(hal_key_event_t));
     if (!s_event_queue) {
         ESP_LOGE(TAG, "Failed to create event queue");
         return ESP_ERR_NO_MEM;
@@ -255,7 +257,7 @@ esp_err_t key_hal_init(void)
     }
 
     // 创建按键处理任务
-    xTaskCreate(key_hal_task, "key_hal_task", 4096, NULL, 5, NULL);
+    xTaskCreatePinnedToCore(key_hal_task, "key_hal_task", 4096, NULL, TASK_PRIO_HAL, NULL, TASK_CORE_HAL);
 
     ESP_LOGI(TAG, "Key HAL initialized, target service ID = %d", s_target_service_id);
     return ESP_OK;

@@ -1,11 +1,13 @@
 // main/services/wifi_service.c
 #include "string.h"
 #include <stdlib.h>
-#include "wifi_service.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_log.h"
+
+#include "wifi_service.h"
 #include "hal/wifi_hal.h"
+#include "system_config.h"
 #include "services/system_event.h"
 
 
@@ -49,13 +51,13 @@ esp_err_t wifi_service_init(void)
     load_credentials();
 
     // 3. 创建外部wifi请求队列
-    wifi_service_request_queue = xQueueCreate(8, sizeof(event_data_t*));
+    wifi_service_request_queue = xQueueCreate(QUEUE_SERVICE_SIZE, sizeof(event_data_t*));
     if (! wifi_service_request_queue) {
         ESP_LOGE(TAG, "Failed to create request queue");
         return ESP_ERR_NO_MEM;
     }
     // 5. 启动服务任务
-    xTaskCreate(wifi_service_task, "wifi_service_task", 3584, NULL, 5, &wifi_service_task_handle);
+    xTaskCreatePinnedToCore(wifi_service_task, "wifi_service_task", 3584, NULL, TASK_PRIO_WIFI_SERVICE, &wifi_service_task_handle, TASK_CORE_SERVICE);
     ESP_LOGI(TAG, "Initialized");
     return ESP_OK;
 }

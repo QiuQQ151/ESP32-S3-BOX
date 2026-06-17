@@ -3,16 +3,17 @@
 #include <stdlib.h>
 #include "esp_log.h"
 #include "lvgl.h"
+
+
 #include "desktop_app.h"
-#include "led_service.h"         // led_service_set_panel_mode
-#include "ui_service.h"          // ui_service_get_last_launched_app
-#include "system_event.h"        // event_data_t, NOTIFICATION, KEYHAL_SERVICE
-#include "keys_hal.h"            // key_event_data_t, KEY_EVENT_*, KEY_ID_*
+#include "led_service.h"         
+#include "ui_service.h"     
+#include "audio_service.h"    
+#include "system_event.h"       
+#include "keys_hal.h"            
 
 // ---------- 长按触发打开应用的时间（毫秒） ----------
-// 注意：实际生效的长按时间由 LVGL 全局配置决定，请在 lv_conf.h 中设置 LV_INDEV_DEF_LONG_PRESS_TIME，
-//       或通过 lv_indev_set_long_press_time() （LVGL v8+）进行运行时修改。
-#define DESKTOP_LONG_PRESS_TIME_MS   800
+#define DESKTOP_LONG_PRESS_TIME_MS   1500
 
 // ---------- 动画类型定义 ----------
 typedef enum {
@@ -48,17 +49,17 @@ typedef struct {
 } desktop_item_t;
 
 static const desktop_item_t desktop_items[] = {
-    { "soundcard_app",  &icon_usb_vol, "USB音箱" },     
+    //{ "soundcard_app",  &icon_usb_vol, "USB音箱" },     
     { "music_app",    &icon_music,     "音乐" },
     { "radio_app",    &icon_radio,     "网络收音机" },
-    { "tomato_app",   &icon_tomato,    "番茄时钟" },
-    { "deepseek_app", &icon_deepseek,  "DeepSeek" },
-    { "weather_app",  &icon_weather,   "天气" },
-    { "clock_app",    &icon_clock,     "闹钟设置" },
-    { "folder_app",   &icon_folder,    "文件" },
-    { "record_app",   &icon_record,    "录音机" },
-    { "lght_app",     &icon_light,     "手电筒" },
-    { "usb_disk_app", &icon_usb,       "U盘模式" },
+    // { "tomato_app",   &icon_tomato,    "番茄时钟" },
+    // { "deepseek_app", &icon_deepseek,  "DeepSeek" },
+    // { "weather_app",  &icon_weather,   "天气" },
+    // { "clock_app",    &icon_clock,     "闹钟设置" },
+    // { "folder_app",   &icon_folder,    "文件" },
+    // { "record_app",   &icon_record,    "录音机" },
+    // { "lght_app",     &icon_light,     "手电筒" },
+    // { "usb_disk_app", &icon_usb,       "U盘模式" },
     { "setting_app",  &icon_setting,   "设置" },
 };
 static const int desktop_item_count = sizeof(desktop_items) / sizeof(desktop_items[0]);
@@ -111,6 +112,7 @@ static void anim_slide_out_ready_cb(lv_anim_t *a);
 static void anim_slide_in_ready_cb(lv_anim_t *a);
 static void anim_zoom_out_ready_cb(lv_anim_t *a);
 static void anim_zoom_in_ready_cb(lv_anim_t *a);
+static void soundcard_handle_change_to_audio(audio_service_cmd_t cmd);
 
 // ---------- 生命周期实现 ----------
 static void desktop_on_create(ui_app_t *app)
@@ -146,6 +148,9 @@ static void desktop_on_create(ui_app_t *app)
 
 static void desktop_on_open(ui_app_t *app)
 {
+    // 设置声卡模式
+    soundcard_handle_change_to_audio(AUDIO_CMD_CONNECT);
+
     // 请求LED服务设置模式
     led_service_receive_data_t* led_payload = (led_service_receive_data_t*)malloc(sizeof(led_service_receive_data_t));
     if(led_payload){
@@ -191,6 +196,8 @@ static void desktop_on_open(ui_app_t *app)
 static void desktop_on_close(ui_app_t *app)
 {
     anim_in_progress = false;   // 停止可能正在运行的动画
+    // 关闭声卡模式
+    soundcard_handle_change_to_audio(AUDIO_CMD_DISCONNECT);
     ESP_LOGI(TAG, "Desktop closed");
 }
 
@@ -200,12 +207,10 @@ static void desktop_on_destroy(ui_app_t *app)
         lv_obj_del(desktop_screen);
         desktop_screen = NULL;
     }
+    app->screen = NULL;  
     icon_img = NULL;
     name_label = NULL;
     anim_in_progress = false;
-
-    app->screen = NULL;   // ★ 必须置空，否则 UI 服务不会重建屏幕
-
     ESP_LOGI(TAG, "Desktop destroyed");
 }
 
@@ -330,6 +335,63 @@ static void desktop_gesture_handler(lv_event_t *e)
 static void desktop_icon_long_press_handler(lv_event_t *e)
 {
     desktop_open_current();
+}
+
+// 声卡播放
+static void soundcard_handle_change_to_audio(audio_service_cmd_t cmd)
+{   
+    // uac播放
+    ESP_LOGI(TAG, "uac build play");
+    audio_service_receive_data_t *payload = malloc(sizeof(audio_service_receive_data_t));
+    if (!payload) return;
+    memset(payload, 0, sizeof(audio_service_receive_data_t));
+    payload->cmd = cmd;
+    if (cmd == AUDIO_CMD_CONNECT) {
+        // 声卡管线：USB UAC 输入 → 无解码 → I2S 输出
+        payload->prv_type = usb_uac;          // 音频来源：USB 主机
+        payload->midle_type = raw_hal; // 无需解码
+        payload->back_type = i2s_hal;          // 输出到板载扬声器
+        payload->volume = get_audio_volume();
+        payload->start_after_connect = true;
+    }
+    event_data_t *evt = malloc(sizeof(event_data_t));
+    if (!evt) {
+        free(payload);
+        return;
+    }
+    evt->service_id = UI_SERVICE;
+    evt->event_type = REQUEST;
+    evt->reply_queue = NULL;   // 本应用无需同步回复
+    evt->data = payload;
+    evt->data_len = sizeof(audio_service_receive_data_t);
+    xQueueSend(get_audio_service_queue(), &evt, 0);
+    ESP_LOGI(TAG, "Sent audio service request: cmd=%d", cmd);
+
+    // uac录音
+    ESP_LOGI(TAG, "uac build record");
+    payload = malloc(sizeof(audio_service_receive_data_t));
+    if (!payload) return;
+    memset(payload, 0, sizeof(audio_service_receive_data_t));
+    payload->cmd = cmd;
+    if (cmd == AUDIO_CMD_CONNECT) {
+        payload->prv_type = i2s_hal;          // 
+        payload->midle_type = raw_hal; // 无需解码
+        payload->back_type = usb_uac;          // 
+        payload->volume = get_audio_volume();
+        payload->start_after_connect = true;
+    }
+    evt = malloc(sizeof(event_data_t));
+    if (!evt) {
+        free(payload);
+        return;
+    }
+    evt->service_id = UI_SERVICE;
+    evt->event_type = REQUEST;
+    evt->reply_queue = NULL;   // 本应用无需同步回复
+    evt->data = payload;
+    evt->data_len = sizeof(audio_service_receive_data_t);
+    xQueueSend(get_audio_service_queue(), &evt, 0); 
+    ESP_LOGI(TAG, "Sent audio service request: cmd=%d", cmd);   
 }
 
 // ========== 动画部分 ==========
@@ -631,6 +693,8 @@ static void anim_zoom_in_ready_cb(lv_anim_t *a)
     lv_obj_set_style_opa(icon_img, LV_OPA_COVER, 0);
     lv_obj_set_style_opa(name_label, LV_OPA_COVER, 0);
 }
+
+
 
 // ========== 注册函数 ==========
 void desktop_app_register(void)

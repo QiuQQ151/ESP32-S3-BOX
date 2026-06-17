@@ -4,6 +4,8 @@
 #include "freertos/task.h"
 #include "driver/i2c.h"
 #include "driver/gpio.h"
+
+#include "system_config.h"
 #include "hal/tca9535_hal.h"
 #include "system_event.h"
 #include "ui_service.h"     // 默认往ui_service发送按键事件
@@ -112,14 +114,14 @@ esp_err_t tca9535_hal_init(i2c_port_t i2c_num) {
     };
     gpio_config(&io_conf);
 
-    // 安装中断服务（如果系统已安装，此调用可忽略 ESP_ERR_INVALID_STATE）
+    // 安装中断服务
     gpio_install_isr_service(0);
     // 添加中断处理函数
     gpio_isr_handler_add(TCA9535_INT_GPIO, tca9535_isr_handler, NULL);
     // =======================================================
 
     ESP_LOGI(TAG, "TCA9535 hal task starting...");
-    xTaskCreate(tca9535_hal_task, "tca9535_hal_task", 4096, NULL, 5, &tca9535_task_handle);
+    xTaskCreatePinnedToCore(tca9535_hal_task, "tca9535_hal_task", 2048, NULL, TASK_PRIO_HAL, &tca9535_task_handle, TASK_CORE_HAL);
     if (tca9535_task_handle == NULL) {
         ESP_LOGE(TAG, "Failed to create task");
         return ESP_FAIL;
